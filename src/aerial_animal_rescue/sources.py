@@ -3,9 +3,12 @@
 Rules:
   - Sources marked `download: manual` (or with no file URLs) only print instructions.
   - Anything over 1 GB, or of unknown size, asks for confirmation first.
-  - Failures are reported, never fatal for the other sources.
+  - Failures are reported, never fatal for the other sources. Dropped connections
+    are resumed (HTTP Range), and so is a .part left by an earlier run.
 """
 
+import http.client
+import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -89,21 +92,49 @@ def confirm(prompt: str) -> bool:
         return False
 
 
-def download_file(url: str, dest: Path, size: int | None) -> None:
-    """Stream `url` to `dest` with a progress bar (via a .part file)."""
+def _fetch_into(url: str, part: Path, size: int | None) -> None:
+    """Append `url` to `part`, resuming from its current length when the server allows."""
+    have = part.stat().st_size if part.exists() else 0
+    if size is not None and have > size:
+        have = 0  # stale .part from a different file: start over
+    if size is not None and have == size:
+        return
+    headers = {"Range": f"bytes={have}-"} if have else {}
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=60) as resp:
+        if have and getattr(resp, "status", None) != 206:
+            have = 0  # server ignored the range: start over
+        with (
+            open(part, "ab" if have else "wb") as out,
+            tqdm(total=size, initial=have, unit="B", unit_scale=True, desc=part.name) as bar,
+        ):
+            while chunk := resp.read(1 << 20):
+                out.write(chunk)
+                bar.update(len(chunk))
+
+
+def download_file(
+    url: str, dest: Path, size: int | None, retries: int = 5, wait_s: float = 10
+) -> None:
+    """Stream `url` to `dest` via a .part file, resuming after dropped connections.
+
+    A .part left by an earlier run is resumed too (HTTP Range), so re-running
+    the download script after a failure continues where it stopped.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
-    with (
-        urllib.request.urlopen(url, timeout=60) as resp,
-        open(part, "wb") as out,
-        tqdm(total=size, unit="B", unit_scale=True, desc=dest.name) as bar,
-    ):
-        while chunk := resp.read(1 << 20):
-            out.write(chunk)
-            bar.update(len(chunk))
-    got = part.stat().st_size
-    if size is not None and got != size:  # connection dropped without an error
-        raise OSError(f"incomplete download: got {got} of {size} bytes (kept {part})")
+    for attempt in range(1, retries + 1):
+        try:
+            _fetch_into(url, part, size)
+            got = part.stat().st_size
+            if size is not None and got != size:  # connection dropped without an error
+                raise OSError(f"incomplete download: got {got} of {size} bytes")
+            break
+        except (OSError, http.client.HTTPException) as e:  # drops, timeouts, short reads
+            if attempt == retries:
+                msg = f"{e} after {retries} attempts (kept {part}, re-run to resume)"
+                raise OSError(msg) from e
+            print(f"{dest.name}: {e}; resuming in {wait_s:.0f} s ({attempt}/{retries})")
+            time.sleep(wait_s)
     part.replace(dest)
 
 
