@@ -4,8 +4,14 @@ Each video has a CSV with rows `frame, object_id, x, y, w, h, class, species,
 occlusion, noise` (class 0 = animal, 1 = human). We turn class + species into
 a name that configs/sources.yaml maps onto our classes.
 
-TODO (verify after download): the exact folder layout. Assumed here:
-  <annotations>/<video>.csv and <images>/<video>/<...><frame number>.jpg
+Layout (checked on the v01 real train/test zips, 2026-10-26):
+  <split>/annotations/<video>.csv and <split>/images/<video>/<video>_<number>.jpg
+
+The CSV frame is 0-based from the video's FIRST image, not the number in the
+file name: almost every video starts at 0, but 0000000011_0000000000 starts at
+87 (confirmed by box brightness peaking at that offset). Frames outside the
+first..last annotated frame are skipped, since we can't tell "empty" from
+"not annotated" there.
 """
 
 import csv
@@ -43,7 +49,7 @@ def _frame_number(path: Path) -> int | None:
 def read_birdsai(
     annotations: Path, images: Path, frame_step: int = 1, **_
 ) -> Iterator[SourceImage]:
-    """Yield every `frame_step`-th annotated frame; the video name is the sequence id."""
+    """Yield every `frame_step`-th frame of each video's annotated span (sequence id = video)."""
     annotations, images = Path(annotations), Path(images)
     for csv_path in sorted(annotations.glob("*.csv")):
         video = csv_path.stem
@@ -60,8 +66,11 @@ def read_birdsai(
             n = _frame_number(p)
             if p.suffix.lower() in IMAGE_EXTS and n is not None:
                 frames[n] = p
-        if not frames:
-            print(f"warning: no frames found in {images / video}, skipped")
+        if not frames or not boxes:
+            print(f"warning: no frames or no boxes for {video}, skipped")
             continue
-        for n in sorted(frames)[::frame_step]:
-            yield SourceImage(path=frames[n], boxes=boxes.get(n, []), sequence_id=video)
+        first = min(frames)
+        span = range(min(boxes), max(boxes) + 1)
+        kept = [n for n in sorted(frames) if n - first in span]
+        for n in kept[::frame_step]:
+            yield SourceImage(path=frames[n], boxes=boxes.get(n - first, []), sequence_id=video)

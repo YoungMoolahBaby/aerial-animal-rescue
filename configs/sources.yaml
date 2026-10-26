@@ -34,16 +34,19 @@ sources:
     role: annotations
     modality: thermal
     contains_people: true
-    citation: 'Bondi et al., "BIRDSAI: A Dataset for Detection and Tracking in Aerial Thermal Infrared Videos". TODO: confirm venue (WACV 2020?)'
+    citation: 'Bondi et al., "BIRDSAI: A Dataset for Detection and Tracking in Aerial Thermal Infrared Videos", WACV 2020'
     converter:
       format: birdsai_csv
-      # TODO: confirm the layout after unzipping and fix these two paths.
-      images: TODO  # folder with one subfolder of frames per video
-      annotations: TODO  # folder with one <video>.csv per video
+      # Layout checked after unzipping (2026-10-26); lists are paired in order.
+      images: [TrainReal/images, TestReal/images]  # one subfolder of frames per video
+      annotations: [TrainReal/annotations, TestReal/annotations]  # one <video>.csv per video
       frame_step: 5  # keep every 5th frame: neighbouring video frames are near-duplicates
     class_map:  # names produced by the converter from the `class` + `species` columns
       human: person
-      dog: dog
+      # Not our `dog` (= domestic dogs): night footage from African reserves, so likely
+      # African wild dogs or ranger tracking dogs - can't tell which. Raw data is kept,
+      # so remapping later is just a re-run of convert_external.py.
+      dog: other_animal
       unknown_animal: other_animal
       elephant: other_animal
       lion: other_animal

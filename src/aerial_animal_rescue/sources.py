@@ -101,6 +101,9 @@ def download_file(url: str, dest: Path, size: int | None) -> None:
         while chunk := resp.read(1 << 20):
             out.write(chunk)
             bar.update(len(chunk))
+    got = part.stat().st_size
+    if size is not None and got != size:  # connection dropped without an error
+        raise OSError(f"incomplete download: got {got} of {size} bytes (kept {part})")
     part.replace(dest)
 
 

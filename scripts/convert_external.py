@@ -1,14 +1,15 @@
 """Convert a downloaded (and unzipped) external dataset into a YOLO pool.
 
 Reads the converter settings and class_map from configs/sources.yaml. Paths in
-sources.yaml are relative to data/external/<source>/; --images/--annotations
-override them.
+sources.yaml are relative to data/external/<source>/ and may be lists (paired
+in order, e.g. one per split); --images/--annotations override them.
 
     uv run python scripts/convert_external.py hit_uav
     -> data/interim/hit_uav/{images,labels,metadata.csv,conversion_log.txt}
 """
 
 import argparse
+from itertools import chain
 from pathlib import Path
 
 from aerial_animal_rescue.classes import ClassMapper, ClassRegistry
@@ -33,24 +34,39 @@ def main() -> None:
     if fmt not in READERS:
         raise SystemExit(f"{args.source}: no converter for format {fmt!r} (see sources.yaml)")
     base = EXTERNAL_DIR / src.name
-    images = args.images or base / str(options.pop("images", "TODO"))
-    annotations = args.annotations or base / str(options.pop("annotations", "TODO"))
+    images = [args.images] if args.images else as_paths(base, options.pop("images", "TODO"))
+    annotations = (
+        [args.annotations]
+        if args.annotations
+        else as_paths(base, options.pop("annotations", "TODO"))
+    )
     options.pop("images", None)
     options.pop("annotations", None)
-    for path in (images, annotations):
+    if len(images) != len(annotations):
+        raise SystemExit("images and annotations must list the same number of folders")
+    for path in images + annotations:
         if "TODO" in path.as_posix() or not path.exists():
             raise SystemExit(f"{path} not found: set the paths in sources.yaml or pass flags")
 
+    reader = READERS[fmt]
     write_pool(
-        READERS[fmt](annotations=annotations, images=images, **options),
+        chain.from_iterable(
+            reader(annotations=a, images=i, **options)
+            for i, a in zip(images, annotations, strict=True)
+        ),
         ClassMapper(ClassRegistry.from_yaml(), src.class_map),
         args.out or INTERIM_DIR / src.name,
         source=src.name,
         source_license=src.license,
         modality=src.modality,
-        image_root=images,
+        # several folders -> ids relative to the source dir, so they stay unique
+        image_root=images[0] if len(images) == 1 else base,
         scene_type=args.scene_type,
     )
+
+
+def as_paths(base: Path, value: str | list[str]) -> list[Path]:
+    return [base / str(v) for v in (value if isinstance(value, list) else [value])]
 
 
 if __name__ == "__main__":

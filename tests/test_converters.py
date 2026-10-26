@@ -64,3 +64,18 @@ def test_birdsai_reader(tmp_path):
     assert items[0].boxes == [("dog", 5.0, 5.0, 15.0, 15.0)]
     assert items[1].boxes[0][0] == "human"
     assert {i.sequence_id for i in items} == {"vid1"}
+
+
+def test_birdsai_frames_count_from_first_image(tmp_path):
+    # images start at 87 (as in video 0000000011_0000000000); CSV frames are 0-based
+    for n in range(87, 93):
+        make_image(tmp_path / "images" / "vid2" / f"vid2_{n:010d}.jpg", seed=n)
+    (tmp_path / "ann").mkdir()
+    (tmp_path / "ann" / "vid2.csv").write_text(
+        "1,1,5,5,10,10,1,0,0,0\n"  # frame 1 -> image 88
+        "3,1,6,6,10,10,1,0,0,0\n"  # frame 3 -> image 90
+    )
+    items = list(read_birdsai(tmp_path / "ann", tmp_path / "images"))
+    # only the annotated span 1..3 is kept; frame 2 is a negative inside it
+    assert [i.path.name for i in items] == [f"vid2_{n:010d}.jpg" for n in (88, 89, 90)]
+    assert [len(i.boxes) for i in items] == [1, 0, 1]
