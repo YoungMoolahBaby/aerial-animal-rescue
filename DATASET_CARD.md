@@ -61,7 +61,8 @@ synthetic, altitude_m, weather (clear|rain|fog|unknown), scene_type
 (flood|debris_flow|pasture|urban|other), sequence_id, capture_date, split, privacy_reviewed`.
 
 Splits are **grouped by flight or video sequence**, so near-duplicate frames never cross
-splits. **The test set contains real images only.** Synthetic images are in train only.
+splits. Each source is split on its own (about 70/15/15 of its images with boxes), so
+every source appears in val and test. **The test set contains real images only.** Synthetic images are in train only.
 
 Empty images (no boxes) are sampled down to at most 10% of train, spread across flights.
 Val and test keep every empty image, so their numbers include false alarms on empty

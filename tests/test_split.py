@@ -115,3 +115,14 @@ def test_build_processed_samples_empty_train_images(tmp_path, registry):
     df = build_processed([pool], tmp_path / "out", list(registry.names), train_empty_frac=0.0)
     assert set(df[df["split"] == "train"]["image_id"].str[-1]) == {"0"}
     assert (df[df["split"] != "train"]["image_id"].str[-1] != "0").any()  # val/test keep them
+
+
+def test_each_source_is_split_on_its_own():
+    big = frame(n_flights=60, frames_per_flight=10, n_synthetic=0)
+    small = frame(n_flights=20, frames_per_flight=5, n_synthetic=0).assign(source="small")
+    df = pd.concat([big, small], ignore_index=True)
+    split = assign_splits(df, seed=0)
+    for source in ("own", "small"):
+        counts = split[df["source"] == source].value_counts(normalize=True)
+        assert set(counts.index) == {"train", "val", "test"}
+        assert 0.6 <= counts["train"] <= 0.8, (source, counts.to_dict())

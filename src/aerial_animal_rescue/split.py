@@ -45,11 +45,17 @@ def assign_splits(
     ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
     seed: int = 0,
     group_by: str = "sequence",
+    weights: pd.Series | None = None,
 ) -> pd.Series:
     """Return a split name per row. Whole groups go to one split.
 
-    Real groups are shuffled (deterministically by `seed`) and each is given
-    to the split currently furthest below its target share of real images.
+    Each real group is given to the split currently furthest below its target
+    share, largest groups first (ties shuffled by `seed`), which balances
+    uneven groups well. A group's size is the sum of `weights` over its rows
+    (default 1 per image; build_processed counts an empty image as 1/100, so a
+    long flight over empty pasture doesn't count as big). With
+    `group_by="sequence"` this runs per source, so every source gets roughly
+    `ratios` instead of a big source swamping a small one.
     """
     if abs(sum(ratios) - 1.0) > 1e-6:
         raise ValueError(f"ratios must sum to 1, got {ratios}")
@@ -57,17 +63,23 @@ def assign_splits(
     synthetic = df["synthetic"].astype(bool)
     result = pd.Series("train", index=df.index, dtype=object)
 
-    real_sizes = keys[~synthetic].value_counts().sort_index()
-    order = list(real_sizes.index)
-    random.Random(seed).shuffle(order)
-    total = int(real_sizes.sum())
-    counts = dict.fromkeys(SPLIT_NAMES, 0)
+    real = ~synthetic
+    weights = pd.Series(1, index=df.index) if weights is None else weights
+    strata = df["source"].astype(str) if group_by == "sequence" else pd.Series("", index=df.index)
     group_split = {}
-    for g in order:
-        split = max(SPLIT_NAMES, key=lambda s: ratios[SPLIT_NAMES.index(s)] * total - counts[s])
-        group_split[g] = split
-        counts[split] += int(real_sizes[g])
-    result[~synthetic] = keys[~synthetic].map(group_split)
+    for stratum in sorted(strata[real].unique()):
+        rows = real & (strata == stratum)
+        sizes = weights[rows].groupby(keys[rows]).sum().sort_index()
+        order = list(sizes.index)
+        random.Random(f"{seed}/{stratum}").shuffle(order)
+        order.sort(key=lambda g: -sizes[g])  # stable: equal sizes keep the shuffled order
+        total = float(sizes.sum())
+        counts = dict.fromkeys(SPLIT_NAMES, 0)
+        for g in order:
+            split = max(SPLIT_NAMES, key=lambda s: ratios[SPLIT_NAMES.index(s)] * total - counts[s])
+            group_split[g] = split
+            counts[split] += float(sizes[g])
+    result[real] = keys[real].map(group_split)
 
     mixed = set(keys[synthetic]) & set(group_split)
     if mixed:  # a group with both synthetic and real images: keep it out of val/test
@@ -140,9 +152,11 @@ def build_processed(
     if not dupes.empty:
         raise ValueError(f"duplicate image_ids across pools, e.g. {dupes.iloc[0]!r}")
 
-    df["split"] = assign_splits(df, ratios, seed, group_by)
+    empty = df["src_path"].map(lambda p: not label_path_for(p).read_text().strip())
+    df["split"] = assign_splits(
+        df, ratios, seed, group_by, weights=empty.map({True: 0.01, False: 1.0})
+    )
     if train_empty_frac is not None:
-        empty = df["src_path"].map(lambda p: not label_path_for(p).read_text().strip())
         keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by)
         print(
             f"train: kept {int((keep & empty & (df['split'] == 'train')).sum())} of "
