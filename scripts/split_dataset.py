@@ -29,6 +29,12 @@ def main() -> None:
     p.add_argument("--group-by", choices=["sequence", "source"], default="sequence")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true", help="replace an existing processed set")
+    p.add_argument(
+        "--train-empty-frac",
+        type=float,
+        default=0.1,
+        help="max share of empty images in train (val/test keep all); -1 keeps all",
+    )
     args = p.parse_args()
 
     pools = args.pools or default_pools()
@@ -43,6 +49,7 @@ def main() -> None:
         args.seed,
         args.group_by,
         args.overwrite,
+        None if args.train_empty_frac < 0 else args.train_empty_frac,
     )
 
 

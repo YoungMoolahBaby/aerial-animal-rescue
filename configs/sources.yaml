@@ -70,15 +70,26 @@ sources:
     contains_people: TODO
     citation: "Helary & Lebreton, Drone images and their annotations of grazing cows, Zenodo, doi:10.5281/zenodo.11048412"
     converter:
-      format: voc  # the record ships PASCAL VOC xml and YOLO txt
-      images: TODO
-      annotations: TODO
+      # Layout read from the zip (2026-10-26). YOLO, not VOC: the VOC xml covers only
+      # part of Mauron and none of Other_farms. YOLO labels sit in CVAT's
+      # obj_train_data/ and some flight folders are named differently from the image
+      # folders, so the reader matches labels by file name (unique in this zip).
+      format: yolo
+      images:
+        - Cattle_drone_images/Derval/JPGImages
+        - Cattle_drone_images/Jalogny/JPGImages
+        - Cattle_drone_images/Mauron/JPGImages
+        - Cattle_drone_images/Other_farms/JPGImages
+      annotations:
+        - Cattle_drone_images/Derval/YOLO_1.1
+        - Cattle_drone_images/Jalogny/YOLO1.1
+        - Cattle_drone_images/Mauron/YOLO_1.1
+        - Cattle_drone_images/Other_farms/YOLO1.1
+      class_names: [cow, calf]  # every obj.names in the zip lists them in this order
+      sequence_from_folder: true  # one folder per flight (DJI_<date>_<mission>)
     class_map:
-      # TODO: the record does not state the label string. Run the converter once
-      # and read conversion_log.txt: any unlisted name shows up as "dropped".
       cow: cattle
-      cows: cattle
-      cattle: cattle
+      calf: cattle
 
   uclan_livestock:
     title: "UCLan: Airborne vision-based remote sensing imagery from large farms (livestock)"

@@ -7,10 +7,14 @@ singletons (`group_by="sequence"`, the default, prints a warning count).
 
 Test rule: the test set is real images only. Synthetic images always go to
 train, so validation and test numbers measure real-world performance.
+
+Empty images (no boxes) can be thinned out of train only: val and test keep
+all of them, since false alarms on empty frames are part of what we measure.
 """
 
 import random
 import shutil
+from itertools import zip_longest
 from pathlib import Path
 
 import pandas as pd
@@ -21,7 +25,7 @@ from aerial_animal_rescue.yolo import label_path_for
 SPLIT_NAMES = ("train", "val", "test")
 
 
-def group_keys(df: pd.DataFrame, group_by: str = "sequence") -> pd.Series:
+def group_keys(df: pd.DataFrame, group_by: str = "sequence", warn: bool = True) -> pd.Series:
     """Grouping key per row: `source/sequence_id`, or the fallback described above."""
     if group_by == "source":
         return df["source"].astype(str)
@@ -31,7 +35,7 @@ def group_keys(df: pd.DataFrame, group_by: str = "sequence") -> pd.Series:
     keys = df["source"].astype(str) + "/" + df["sequence_id"].astype(str)
     singles = df["source"].astype(str) + "/image/" + df["image_id"].astype(str)
     missing = int((~has_seq).sum())
-    if missing:
+    if missing and warn:
         print(f"warning: {missing} images have no sequence_id and are split one by one")
     return keys.where(has_seq, singles)
 
@@ -71,6 +75,35 @@ def assign_splits(
     return result
 
 
+def sample_train_empty(
+    df: pd.DataFrame,
+    empty: pd.Series,
+    frac: float,
+    seed: int = 0,
+    group_by: str = "sequence",
+) -> pd.Series:
+    """Rows to keep so empty images are at most `frac` of train; other splits untouched.
+
+    Empty train images are taken round-robin across groups (flights), each group
+    shuffled by `seed`, so the kept backgrounds come from as many flights as possible.
+    """
+    if not 0 <= frac < 1:
+        raise ValueError(f"frac must be in [0, 1), got {frac}")
+    train = df["split"] == "train"
+    candidates = train & empty
+    n_keep = int(frac * int((train & ~empty).sum()) / (1 - frac))
+    keys = group_keys(df[candidates], group_by, warn=False)
+    rng = random.Random(seed)
+    groups = [list(idx) for _, idx in sorted(keys.groupby(keys).groups.items())]
+    rng.shuffle(groups)
+    for g in groups:
+        rng.shuffle(g)
+    order = [i for rnd in zip_longest(*groups) for i in rnd if i is not None]
+    keep = ~candidates
+    keep.loc[order[:n_keep]] = True
+    return keep
+
+
 def build_processed(
     pools: list[Path],
     out_dir: Path,
@@ -79,10 +112,12 @@ def build_processed(
     seed: int = 0,
     group_by: str = "sequence",
     overwrite: bool = False,
+    train_empty_frac: float | None = None,
 ) -> pd.DataFrame:
     """Merge pools (each with metadata.csv, images/, labels/), split, copy into `out_dir`.
 
-    Images without a label file are not annotated yet and are skipped.
+    Images without a label file are not annotated yet and are skipped. With
+    `train_empty_frac`, empty images are sampled down to that share of train.
     """
     out_dir = Path(out_dir)
     for sub in ("images", "labels"):
@@ -106,6 +141,14 @@ def build_processed(
         raise ValueError(f"duplicate image_ids across pools, e.g. {dupes.iloc[0]!r}")
 
     df["split"] = assign_splits(df, ratios, seed, group_by)
+    if train_empty_frac is not None:
+        empty = df["src_path"].map(lambda p: not label_path_for(p).read_text().strip())
+        keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by)
+        print(
+            f"train: kept {int((keep & empty & (df['split'] == 'train')).sum())} of "
+            f"{int((empty & (df['split'] == 'train')).sum())} empty images"
+        )
+        df = df[keep].reset_index(drop=True)
     new_paths = []
     for row in df.itertuples():
         rel = Path("images") / row.split / f"{row.image_id}{Path(row.src_path).suffix}"

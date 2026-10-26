@@ -63,6 +63,10 @@ synthetic, altitude_m, weather (clear|rain|fog|unknown), scene_type
 Splits are **grouped by flight or video sequence**, so near-duplicate frames never cross
 splits. **The test set contains real images only.** Synthetic images are in train only.
 
+Empty images (no boxes) are sampled down to at most 10% of train, spread across flights.
+Val and test keep every empty image, so their numbers include false alarms on empty
+ground, which is most of what a search drone sees.
+
 TODO: table of image and box counts per split, class and modality (the output of
 `scripts/validate_dataset.py`).
 

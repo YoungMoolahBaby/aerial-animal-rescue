@@ -3,7 +3,7 @@ import json
 import pytest
 
 from aerial_animal_rescue.classes import ClassMapper
-from aerial_animal_rescue.converters import read_coco, read_voc, write_pool
+from aerial_animal_rescue.converters import read_coco, read_voc, read_yolo, write_pool
 from aerial_animal_rescue.converters.birdsai import read_birdsai
 from aerial_animal_rescue.metadata import read_metadata
 from aerial_animal_rescue.yolo import read_labels
@@ -79,3 +79,26 @@ def test_birdsai_frames_count_from_first_image(tmp_path):
     # only the annotated span 1..3 is kept; frame 2 is a negative inside it
     assert [i.path.name for i in items] == [f"vid2_{n:010d}.jpg" for n in (88, 89, 90)]
     assert [len(i.boxes) for i in items] == [1, 0, 1]
+
+
+def test_yolo_reader_finds_cvat_labels_by_name(tmp_path):
+    # ICAERUS layout: labels under obj_train_data/, in a differently named flight folder
+    make_image(tmp_path / "img" / "flight_042" / "a.jpg", size=(100, 50))
+    make_image(tmp_path / "img" / "flight_042" / "b.jpg", size=(100, 50))
+    make_image(tmp_path / "img" / "flight_043" / "c.jpg", size=(100, 50))
+    lab = tmp_path / "lab" / "flight_031" / "obj_train_data"
+    lab.mkdir(parents=True)
+    (lab / "a.txt").write_text("1 0.5 0.5 0.2 0.2\n")  # calf
+    (lab / "b.txt").write_text("")  # empty pasture
+    items = list(
+        read_yolo(
+            tmp_path / "lab",
+            tmp_path / "img",
+            class_names=["cow", "calf"],
+            sequence_from_folder=True,
+        )
+    )
+    assert [i.path.name for i in items] == ["a.jpg", "b.jpg"]  # c.jpg has no label
+    assert items[0].boxes == [("calf", 40.0, 20.0, 60.0, 30.0)]
+    assert items[1].boxes == []
+    assert {i.sequence_id for i in items} == {"flight_042"}
