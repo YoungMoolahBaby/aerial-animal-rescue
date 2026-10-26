@@ -1,0 +1,39 @@
+# --- Data: never commit images, footage or labels. Folders are kept via .gitkeep.
+/data/*
+!/data/*/
+/data/*/*
+!/data/*/.gitkeep
+!/data/*/*/
+/data/*/*/*
+!/data/*/*/.gitkeep
+
+# --- Training output and model weights
+runs/
+weights/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.safetensors
+*.tflite
+
+# --- Secrets
+.env
+.env.*
+
+# --- Python / tooling
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

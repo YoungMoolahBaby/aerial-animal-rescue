@@ -1,0 +1,144 @@
+# Registry of candidate external datasets.
+#
+# Every fact below was checked against the source's own page on 2026-10-26.
+# Anything not confirmed is marked TODO. Re-check the license yourself before
+# redistributing anything: licenses change, and this file is not legal advice.
+#
+# Fields:
+#   url            landing page (where the license is stated)
+#   files          direct download URLs (empty -> manual download)
+#   download       automatic | manual
+#   size_gb        approximate total size of `files` (downloads > 1 GB ask first)
+#   license        SPDX-style id as stated by the source
+#   redistribution allowed | non_commercial | not_allowed | TODO
+#                  upload_to_hf refuses images whose source is not_allowed or TODO
+#   role           annotations (animal/person boxes) | backgrounds (for compositing)
+#   modality       rgb | thermal
+#   converter      how to turn its annotations into our YOLO pool (see converters/)
+#                  (images/annotations paths are relative to data/external/<name>/)
+#   class_map      source class -> our class (configs/classes.yaml); null = drop on purpose.
+#                  Classes not listed are dropped and logged.
+
+sources:
+  birdsai:
+    title: "BIRDSAI / Conservation Drones (LILA BC)"
+    url: https://lila.science/datasets/conservationdrones
+    files:
+      - https://storage.googleapis.com/public-datasets-lila/conservationdrones/v01/conservation_drones_train_real.zip
+      - https://storage.googleapis.com/public-datasets-lila/conservationdrones/v01/conservation_drones_test_real.zip
+    # Also available, NOT listed on purpose: conservation_drones_train_simulation.zip (39.5 GB).
+    download: automatic
+    size_gb: 3.7
+    license: CDLA-Permissive-1.0
+    redistribution: allowed
+    role: annotations
+    modality: thermal
+    contains_people: true
+    citation: 'Bondi et al., "BIRDSAI: A Dataset for Detection and Tracking in Aerial Thermal Infrared Videos". TODO: confirm venue (WACV 2020?)'
+    converter:
+      format: birdsai_csv
+      # TODO: confirm the layout after unzipping and fix these two paths.
+      images: TODO  # folder with one subfolder of frames per video
+      annotations: TODO  # folder with one <video>.csv per video
+      frame_step: 5  # keep every 5th frame: neighbouring video frames are near-duplicates
+    class_map:  # names produced by the converter from the `class` + `species` columns
+      human: person
+      dog: dog
+      unknown_animal: other_animal
+      elephant: other_animal
+      lion: other_animal
+      giraffe: other_animal
+      crocodile: other_animal
+      hippo: other_animal
+      zebra: other_animal
+      rhino: other_animal
+
+  icaerus_cows:
+    title: "ICAERUS: Drone images and their annotations of grazing cows (v2)"
+    url: https://zenodo.org/records/11048412
+    files:
+      - https://zenodo.org/api/records/11048412/files/Cattle_drone_images_042024.zip/content
+    download: automatic
+    size_gb: 16.6
+    license: CC-BY-4.0
+    redistribution: allowed
+    role: annotations
+    modality: rgb
+    contains_people: TODO
+    citation: "Helary & Lebreton, Drone images and their annotations of grazing cows, Zenodo, doi:10.5281/zenodo.11048412"
+    converter:
+      format: voc  # the record ships PASCAL VOC xml and YOLO txt
+      images: TODO
+      annotations: TODO
+    class_map:
+      # TODO: the record does not state the label string. Run the converter once
+      # and read conversion_log.txt: any unlisted name shows up as "dropped".
+      cow: cattle
+      cows: cattle
+      cattle: cattle
+
+  uclan_livestock:
+    title: "UCLan: Airborne vision-based remote sensing imagery from large farms (livestock)"
+    url: https://ieee-dataport.org/documents/airborne-vision-based-remote-sensing-imagery-datasets-large-farms-using-autonomous-drones
+    files: []  # requires an IEEE DataPort subscription
+    download: manual
+    size_gb: 1.5
+    license: TODO  # not stated on the DataPort or UCLan pages: ask the authors before use
+    redistribution: TODO
+    role: annotations  # TODO: no sign that labels exist; may need our own annotation
+    modality: rgb  # also thermal (Zenmuse H20T): split by folder when converting
+    contains_people: TODO
+    citation: "Kuru, Ansell & Jones, IEEE DataPort, 2023, doi:10.21227/765q-1q97"
+    manual_instructions: |
+      Needs an IEEE DataPort subscription and has no stated license.
+      1. Email the authors (UCLan) to ask about labels and redistribution terms.
+      2. Download the Mavic 2 and ZH20T image sets into data/external/uclan_livestock/.
+      3. Record the license here before converting anything.
+    converter:
+      format: TODO
+    class_map: {}
+
+  floodnet:
+    title: "FloodNet (Track 1, supervised) - post-Hurricane-Harvey UAV imagery"
+    url: https://github.com/BinaLab/FloodNet-Supervised_v1.0
+    files: []  # Dropbox / Google Drive folders only
+    download: manual
+    size_gb: 12  # unverified at the source
+    license: CDLA-Permissive-1.0  # per the README; a secondary site says CC-BY-SA-4.0 -> TODO confirm
+    redistribution: allowed
+    role: backgrounds  # no animal or person classes: used as flood backgrounds for compositing
+    modality: rgb
+    contains_people: TODO
+    citation: 'Rahnemoonfar et al., "FloodNet: A High Resolution Aerial Imagery Dataset for Post Flood Scene Understanding", IEEE Access 9, 2021'
+    manual_instructions: |
+      Download from the links in the README of https://github.com/BinaLab/FloodNet-Supervised_v1.0
+      (Dropbox or Google Drive folder; about 12 GB). Put the images into
+      data/synthetic/backgrounds/floodnet/ (flooded scenes are the most useful).
+    converter:
+      format: none  # backgrounds only
+    class_map: {}
+
+  hit_uav:
+    title: "HIT-UAV: high-altitude infrared thermal dataset"
+    url: https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset
+    files:
+      - https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset/archive/refs/heads/main.zip
+    download: automatic
+    size_gb: 0.41
+    license: CC-BY-4.0
+    redistribution: allowed
+    role: annotations  # people + thermal negatives; no animals
+    modality: thermal
+    contains_people: true
+    citation: 'Suo et al., "HIT-UAV: A high-altitude infrared thermal dataset for Unmanned Aerial Vehicle-based object detection", Scientific Data 10, 227 (2023)'
+    converter:
+      format: voc  # normal_xml; its COCO json uses a non-standard "annotation" key
+      # TODO: confirm after unzipping (folder names from the repo README).
+      images: TODO
+      annotations: TODO
+    class_map:
+      Person: person
+      Car: null
+      Bicycle: null
+      OtherVehicle: null
+      DontCare: null

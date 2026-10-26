@@ -1,0 +1,31 @@
+# Target classes for aerial-animal-rescue.
+#
+# `id` is the YOLO class index written into every label file.
+# Rules for extending:
+#   - NEVER renumber or delete an existing class: that silently corrupts all labels.
+#   - Add new classes at the end with the next free id, and bump `version`.
+#   - Narrowing a class (e.g. splitting `small_livestock` into goat/sheep) is a
+#     relabeling job: add the new classes, migrate labels, then retire the old one.
+version: 1
+classes:
+  - id: 0
+    name: person
+    description: Any human. Kept so the model separates people from animals; never publish identifiable faces.
+  - id: 1
+    name: dog
+    description: Domestic dogs.
+  - id: 2
+    name: cat
+    description: Domestic cats.
+  - id: 3
+    name: horse
+    description: Horses, ponies, donkeys, mules.
+  - id: 4
+    name: cattle
+    description: Cows, bulls, calves, buffalo.
+  - id: 5
+    name: small_livestock
+    description: Goats and sheep.
+  - id: 6
+    name: other_animal
+    description: Any other animal (pigs, poultry, wildlife, species unknown).
