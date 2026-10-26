@@ -18,6 +18,8 @@
 #                  (images/annotations paths are relative to data/external/<name>/)
 #   class_map      source class -> our class (configs/classes.yaml); null = drop on purpose.
 #                  Classes not listed are dropped and logged.
+#   exclude        image file names (no extension) to leave out, with the reason in a
+#                  comment; conversion fails if a name matches no image
 
 sources:
   birdsai:
@@ -71,6 +73,16 @@ sources:
     # 1385 images (farm yards, a track), top-down and not identifiable. They have NO boxes
     # in the source labels.
     contains_people: true
+    exclude:  # people with no boxes: they would teach the model that people are background
+      - DJI_20230607163619_0383_V
+      - DJI_20230607163626_0388_V
+      - DJI_20230607163628_0389_V
+      - DJI_20230607163629_0390_V
+      - DJI_20230607163630_0391_V
+      - DJI_20230607163632_0392_V
+      - DJI_20230926114210_0013_V
+      - DJI_20231107144804_0031_V
+      - DJI_20231107154442_0028_V
     citation: "Helary & Lebreton, Drone images and their annotations of grazing cows, Zenodo, doi:10.5281/zenodo.11048412"
     converter:
       # Layout read from the zip (2026-10-26). YOLO, not VOC: the VOC xml covers only

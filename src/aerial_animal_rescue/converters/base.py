@@ -26,6 +26,19 @@ class SourceImage:
     height: int | None = None
 
 
+def drop_excluded(items: Iterable[SourceImage], names: Iterable[str]) -> list[SourceImage]:
+    """Remove images whose file name (without extension) is in `names`.
+
+    Raises ValueError if a name matches nothing, so a typo can't silently keep an image.
+    """
+    names = set(names)
+    items = list(items)
+    found = {i.path.stem for i in items} & names
+    if found != names:
+        raise ValueError(f"exclude list names images that don't exist: {sorted(names - found)}")
+    return [i for i in items if i.path.stem not in names]
+
+
 def safe_id(text: str) -> str:
     """Make a filesystem- and URL-safe id fragment."""
     return re.sub(r"[^A-Za-z0-9_-]+", "-", text).strip("-")

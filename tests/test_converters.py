@@ -4,6 +4,7 @@ import pytest
 
 from aerial_animal_rescue.classes import ClassMapper
 from aerial_animal_rescue.converters import read_coco, read_voc, read_yolo, write_pool
+from aerial_animal_rescue.converters.base import SourceImage, drop_excluded
 from aerial_animal_rescue.converters.birdsai import read_birdsai
 from aerial_animal_rescue.metadata import read_metadata
 from aerial_animal_rescue.yolo import read_labels
@@ -102,3 +103,10 @@ def test_yolo_reader_finds_cvat_labels_by_name(tmp_path):
     assert items[0].boxes == [("calf", 40.0, 20.0, 60.0, 30.0)]
     assert items[1].boxes == []
     assert {i.sequence_id for i in items} == {"flight_042"}
+
+
+def test_drop_excluded(tmp_path):
+    items = [SourceImage(path=tmp_path / f"{n}.jpg") for n in ("a", "b", "c")]
+    assert [i.path.stem for i in drop_excluded(items, ["b"])] == ["a", "c"]
+    with pytest.raises(ValueError, match="typo"):
+        drop_excluded(items, ["b", "typo"])

@@ -15,6 +15,7 @@ from pathlib import Path
 from aerial_animal_rescue.classes import ClassMapper, ClassRegistry
 from aerial_animal_rescue.config import EXTERNAL_DIR, INTERIM_DIR
 from aerial_animal_rescue.converters import READERS, write_pool
+from aerial_animal_rescue.converters.base import drop_excluded
 from aerial_animal_rescue.metadata import SCENE_TYPES
 from aerial_animal_rescue.sources import load_sources
 
@@ -49,11 +50,15 @@ def main() -> None:
             raise SystemExit(f"{path} not found: set the paths in sources.yaml or pass flags")
 
     reader = READERS[fmt]
+    items = chain.from_iterable(
+        reader(annotations=a, images=i, **options) for i, a in zip(images, annotations, strict=True)
+    )
+    exclude = src.raw.get("exclude") or []
+    if exclude:
+        items = drop_excluded(items, exclude)
+        print(f"{src.name}: excluded {len(exclude)} images listed in sources.yaml")
     write_pool(
-        chain.from_iterable(
-            reader(annotations=a, images=i, **options)
-            for i, a in zip(images, annotations, strict=True)
-        ),
+        items,
         ClassMapper(ClassRegistry.from_yaml(), src.class_map),
         args.out or INTERIM_DIR / src.name,
         source=src.name,
