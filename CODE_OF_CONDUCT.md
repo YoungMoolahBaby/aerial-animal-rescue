@@ -17,8 +17,12 @@ discussions, and any other project space.
 
 ## Reporting
 
-Report unacceptable behaviour to the maintainers at **TODO-contact@example.org**. All reports
-are reviewed and handled confidentially. Maintainers who do not follow the Code of Conduct
+Report unacceptable behaviour by opening an issue on the
+[GitHub repository](https://github.com/YoungMoolahBaby/aerial-animal-rescue/issues) that says
+you want to make a private report. **Leave the details out of the issue**: a maintainer will
+contact you privately. You can also use GitHub's
+[report content](https://docs.github.com/en/communities/maintaining-your-safety-on-github/reporting-abuse-or-spam)
+feature. All reports are reviewed and handled confidentially. Maintainers who do not follow the Code of Conduct
 may face consequences decided by the other maintainers.
 
 Enforcement follows the
