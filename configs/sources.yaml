@@ -67,7 +67,10 @@ sources:
     redistribution: allowed
     role: annotations
     modality: rgb
-    contains_people: TODO
+    # Screened 2026-10-26 with a COCO YOLO person detector + visual check: people in 9 of
+    # 1385 images (farm yards, a track), top-down and not identifiable. They have NO boxes
+    # in the source labels.
+    contains_people: true
     citation: "Helary & Lebreton, Drone images and their annotations of grazing cows, Zenodo, doi:10.5281/zenodo.11048412"
     converter:
       # Layout read from the zip (2026-10-26). YOLO, not VOC: the VOC xml covers only
