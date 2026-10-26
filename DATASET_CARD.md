@@ -18,7 +18,7 @@ tags:
   - livestock
   - pets
 size_categories:
-  - n<1K  # TODO: update on each release
+  - 1K<n<10K  # update on each release
 ---
 
 # Aerial Animal Rescue
@@ -33,8 +33,11 @@ disasters.
 
 ## Dataset description
 
-TODO: one paragraph on what is in this release, how many images, what share is real vs
-synthetic, and what share is RGB vs thermal.
+The current build (2026-10-26, not yet released) has **9,967 real images** with
+38,084 boxes, from two third-party sources and no synthetic images yet: 9,158 thermal
+frames from BIRDSAI (92%) and 809 RGB drone photos of grazing cattle from ICAERUS (8%).
+It has no own footage, no flood scenes, and no pets or small livestock yet, so for now it
+covers people and wildlife in thermal and cattle on pasture in RGB.
 
 ## Classes
 
@@ -62,14 +65,27 @@ synthetic, altitude_m, weather (clear|rain|fog|unknown), scene_type
 
 Splits are **grouped by flight or video sequence**, so near-duplicate frames never cross
 splits. Each source is split on its own (about 70/15/15 of its images with boxes), so
-every source appears in val and test. **The test set contains real images only.** Synthetic images are in train only.
+every source appears in val and test. **The test set contains real images only.**
+Synthetic images are in train only.
 
 Empty images (no boxes) are sampled down to at most 10% of train, spread across flights.
 Val and test keep every empty image, so their numbers include false alarms on empty
 ground, which is most of what a search drone sees.
 
-TODO: table of image and box counts per split, class and modality (the output of
-`scripts/validate_dataset.py`).
+Counts for the current build (from `scripts/validate_dataset.py`):
+
+| | train | val | test | total |
+|---|---:|---:|---:|---:|
+| images, thermal | 5,532 | 1,750 | 1,876 | 9,158 |
+| images, RGB | 502 | 162 | 145 | 809 |
+| **images** | **6,034** | **1,912** | **2,021** | **9,967** |
+| boxes, `person` (thermal) | 5,044 | 1,449 | 452 | 6,945 |
+| boxes, `cattle` (RGB) | 2,380 | 1,574 | 781 | 4,735 |
+| boxes, `other_animal` (thermal) | 21,208 | 1,582 | 3,614 | 26,404 |
+| **boxes** | **28,632** | **4,605** | **4,847** | **38,084** |
+
+`dog`, `cat`, `horse` and `small_livestock` have no boxes yet. Splits are balanced by
+images, not boxes, so box counts vary: one dense-herd flight puts many cattle boxes in val.
 
 ## Sources and licenses
 
@@ -103,8 +119,10 @@ Fill this from `configs/sources.yaml` for every source in this release.
 
 ## Known limitations
 
-- Small dataset; class imbalance (TODO: numbers). Rare classes (cats, small livestock in
-  floods) are under-represented.
+- Small dataset with strong class imbalance: `other_animal` is 69% of boxes, `person`
+  18%, `cattle` 12%, and `dog`, `cat`, `horse` and `small_livestock` 0% in the current
+  build. Each class also comes from one modality only (people and wildlife thermal,
+  cattle RGB), so the model can learn modality as a shortcut for class.
 - Imported datasets come from different regions, sensors and altitudes. Thermal data mostly
   comes from non-disaster scenes: BIRDSAI is night-time footage of African bushland, not
   floods, and contributes no thermal examples of pets or livestock.

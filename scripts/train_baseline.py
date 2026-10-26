@@ -19,6 +19,13 @@ def main() -> None:
     p.add_argument("--imgsz", type=int, default=1280)
     p.add_argument("--batch", type=int, default=8)
     p.add_argument("--device", default=None, help="e.g. 0 for the first GPU, or cpu")
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="data loader processes; Ultralytics' default of 8 ran out of Windows page file "
+        "during validation on a 32 GB machine",
+    )
     p.add_argument("--name", default="baseline")
     args = p.parse_args()
 
@@ -31,6 +38,7 @@ def main() -> None:
         batch=args.batch,
         device=args.device,
         name=args.name,
+        workers=args.workers,
     )
 
 

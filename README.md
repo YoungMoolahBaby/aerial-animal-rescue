@@ -66,9 +66,13 @@ uv run python scripts/evaluate.py runs/train/baseline/weights/best.pt --split te
 HF_DATASET_REPO=<hf-user>/aerial-animal-rescue HF_TOKEN=... uv run python scripts/upload_to_hf.py --dry-run
 ```
 
-**GPU training:** on Windows, `uv sync` installs the CPU build of PyTorch from PyPI. For an
-NVIDIA GPU, point `torch` and `torchvision` at the PyTorch CUDA index; see
-[uv's PyTorch guide](https://docs.astral.sh/uv/guides/integration/pytorch/).
+**GPU training:** on Windows, `uv sync` installs the CUDA 13.0 build of PyTorch from the
+PyTorch index (see `[tool.uv.sources]` in `pyproject.toml`); Linux gets CUDA builds from PyPI.
+For reference, on an RTX 4070 Ti (12 GB) with the command above (yolo11s, 1280 px, batch 8),
+one epoch over the 2026-10-26 build (6,034 train images) took about 2 min 50 s of training
+plus 20 s of validation, using 9 GB of VRAM, so 100 epochs take roughly 5-7 hours.
+`--workers` defaults to 4: with Ultralytics' 8, validation ran out of Windows page file on
+a 32 GB machine.
 
 ### Data layout
 
