@@ -78,6 +78,42 @@ def average_precision(tp: np.ndarray, scores: np.ndarray, n_gt: int) -> float:
     return float(np.mean([precision[k] if k < len(precision) else 0.0 for k in idx]))
 
 
+def operating_point(
+    results: list[ImageResult], num_classes: int, conf: float, iou: float = 0.5
+) -> dict:
+    """Precision, recall and false alarms when only detections scoring >= `conf` are kept.
+
+    mAP averages over every threshold, but a deployed detector runs at one. False
+    alarms on empty images (no ground truth at all) matter most: they are what a
+    search drone mostly sees, and each one sends someone to look.
+    """
+    tp = fp = n_gt = 0
+    empty_fp = empty_with_fp = n_empty = 0
+    for r in results:
+        pred = r.pred[r.pred[:, 5] >= conf] if len(r.pred) else np.zeros((0, 6))
+        hits = 0
+        for c in range(num_classes):
+            gt = r.gt[r.gt[:, 0] == c] if len(r.gt) else np.zeros((0, 5))
+            p = pred[pred[:, 0] == c]
+            p = p[np.argsort(-p[:, 5], kind="stable")]
+            hit, _ = _match(gt, p, np.zeros(len(gt), bool), np.zeros(len(p), bool), iou)
+            hits += int(hit.sum())
+        tp, fp, n_gt = tp + hits, fp + len(pred) - hits, n_gt + len(r.gt)
+        if len(r.gt) == 0:
+            n_empty += 1
+            empty_fp += len(pred)
+            empty_with_fp += int(len(pred) > 0)
+    nan = float("nan")
+    return {
+        "conf": conf,
+        "precision": tp / (tp + fp) if tp + fp else nan,
+        "recall": tp / n_gt if n_gt else nan,
+        "false_alarms_per_empty_image": empty_fp / n_empty if n_empty else nan,
+        "empty_images_with_false_alarm": empty_with_fp / n_empty if n_empty else nan,
+        "empty_images": n_empty,
+    }
+
+
 def evaluate(
     results: list[ImageResult],
     num_classes: int,

@@ -13,7 +13,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from aerial_animal_rescue.metadata import read_metadata
-from aerial_animal_rescue.metrics import ImageResult, evaluate
+from aerial_animal_rescue.metrics import ImageResult, evaluate, operating_point
 from aerial_animal_rescue.yolo import label_path_for, read_labels, yolo_to_xyxy
 
 # Object size buckets by box area in pixels^2. Finer than COCO at the small end,
@@ -56,6 +56,7 @@ def run_evaluation(
     imgsz: int = 1280,
     conf: float = 0.001,
     device=None,
+    operating_confs: tuple[float, ...] = (0.25, 0.5),
 ) -> dict:
     data_root = Path(data_root)
     meta = read_metadata(data_root / "metadata.csv")
@@ -87,6 +88,14 @@ def run_evaluation(
     report["by_size"] = {
         name: _summary(evaluate(results, n, area_range=rng)) for name, rng in SIZE_BUCKETS.items()
     }
+    # at one detection threshold, as deployed: precision, recall, alarms on empty ground
+    groups = {"all": pd.Series(True, index=meta.index)} | {
+        m: meta["modality"] == m for m in sorted(meta["modality"].dropna().unique())
+    }
+    report["operating_points"] = {
+        g: [operating_point(subset(mask), n, c) for c in operating_confs]
+        for g, mask in groups.items()
+    }
     return report
 
 
@@ -109,6 +118,16 @@ def format_report(report: dict) -> str:
             if "ap50" in v
             else row(k, v)
             for k, v in report[section].items()
+        ]
+    lines.append("operating_points (IoU 0.5; alarms = detections on images with no objects):")
+    for group, ops in report.get("operating_points", {}).items():
+        lines += [
+            f"  {group:<8} conf>={op['conf']:<5} precision={op['precision']:.3f}  "
+            f"recall={op['recall']:.3f}  "
+            f"alarms/empty image={op['false_alarms_per_empty_image']:.3f}  "
+            f"empty images with an alarm={op['empty_images_with_false_alarm']:.1%} "
+            f"(of {op['empty_images']})"
+            for op in ops
         ]
     return "\n".join(lines)
 

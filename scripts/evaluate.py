@@ -1,4 +1,5 @@
-"""Evaluate trained weights: mAP overall, per class, per modality, synthetic vs real, per size.
+"""Evaluate trained weights: mAP overall, per class, per modality, synthetic vs real, per size,
+plus precision, recall and false alarms on empty images at fixed detection thresholds.
 
     uv run python scripts/evaluate.py runs/train/baseline/weights/best.pt --split test
 
@@ -22,6 +23,13 @@ def main() -> None:
     p.add_argument("--imgsz", type=int, default=1280)
     p.add_argument("--device", default=None)
     p.add_argument("--out", type=Path, help="JSON report path (default runs/eval/<split>.json)")
+    p.add_argument(
+        "--conf",
+        nargs="+",
+        type=float,
+        default=[0.25, 0.5],
+        help="detection thresholds for the precision / recall / false-alarm table",
+    )
     args = p.parse_args()
 
     report = run_evaluation(
@@ -31,6 +39,7 @@ def main() -> None:
         split=args.split,
         imgsz=args.imgsz,
         device=args.device,
+        operating_confs=tuple(args.conf),
     )
     print(format_report(report))
     out = args.out or RUNS_DIR / "eval" / f"{args.split}.json"
