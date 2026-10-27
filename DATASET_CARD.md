@@ -33,9 +33,9 @@ disasters.
 
 ## Dataset description
 
-The current build (2026-10-26, not yet released) has **9,967 real images** with
-38,084 boxes, from two third-party sources and no synthetic images yet: 9,158 thermal
-frames from BIRDSAI (92%) and 809 RGB drone photos of grazing cattle from ICAERUS (8%).
+The current build (2026-10-27, not yet released) has **11,228 real images** with
+38,084 boxes, from two third-party sources and no synthetic images yet: 9,852 thermal
+frames from BIRDSAI (88%) and 1,376 RGB drone photos of grazing cattle from ICAERUS (12%).
 It has no own footage, no flood scenes, and no pets or small livestock yet, so for now it
 covers people and wildlife in thermal and cattle on pasture in RGB.
 
@@ -63,29 +63,42 @@ metadata.csv                             # one row per image
 synthetic, altitude_m, weather (clear|rain|fog|unknown), scene_type
 (flood|debris_flow|pasture|urban|other), sequence_id, capture_date, split, privacy_reviewed`.
 
-Splits are **grouped by flight or video sequence**, so near-duplicate frames never cross
-splits. Each source is split on its own (about 70/15/15 of its images with boxes), so
-every source appears in val and test. **The test set contains real images only.**
+Splits are **grouped by flight or video**, so near-duplicate frames never cross splits
+(BIRDSAI video 0000000067 comes as 22 clips; they count as one video). Each source is
+split on its own, so every source appears in val and test. Within a source, flights are
+placed so that images with boxes, empty images, and boxes per class and object size
+(<16, 16-32, 32-96, >96 px) each come out close to 70/15/15. Balancing images alone was
+not enough: BIRDSAI videos differ a lot, and an images-only split trained mostly on large
+animals while testing mostly on tiny ones. Whole videos can't be cut, so some
+size-and-class combinations held by a few dense videos stay uneven (most medium-size
+BIRDSAI animals are in train and val). **The test set contains real images only.**
 Synthetic images are in train only.
 
-Empty images (no boxes) are sampled down to at most 10% of train, spread across flights.
-Val and test keep every empty image, so their numbers include false alarms on empty
-ground, which is most of what a search drone sees.
+Empty images (no boxes) are sampled down to at most 30% of train, spread across flights,
+so the model learns not to fire on background. Val and test keep every empty image, so
+their numbers include false alarms on empty ground, which is most of what a search drone
+sees.
+
+The split was redesigned on 2026-10-27, after a first baseline had been evaluated on the
+previous test set. The redesign used only data statistics (sequence ids, box sizes and
+counts), not model predictions. The earlier split is kept locally with that baseline run
+and is not part of the release.
 
 Counts for the current build (from `scripts/validate_dataset.py`):
 
 | | train | val | test | total |
 |---|---:|---:|---:|---:|
-| images, thermal | 5,532 | 1,750 | 1,876 | 9,158 |
-| images, RGB | 502 | 162 | 145 | 809 |
-| **images** | **6,034** | **1,912** | **2,021** | **9,967** |
-| boxes, `person` (thermal) | 5,044 | 1,449 | 452 | 6,945 |
-| boxes, `cattle` (RGB) | 2,380 | 1,574 | 781 | 4,735 |
-| boxes, `other_animal` (thermal) | 21,208 | 1,582 | 3,614 | 26,404 |
-| **boxes** | **28,632** | **4,605** | **4,847** | **38,084** |
+| images, thermal | 6,739 | 1,737 | 1,376 | 9,852 |
+| images, RGB | 986 | 197 | 193 | 1,376 |
+| **images** | **7,725** | **1,934** | **1,569** | **11,228** |
+| of which empty | 2,317 (30%) | 592 (31%) | 571 (36%) | 3,480 |
+| boxes, `person` (thermal) | 5,397 | 670 | 878 | 6,945 |
+| boxes, `cattle` (RGB) | 3,316 | 758 | 661 | 4,735 |
+| boxes, `other_animal` (thermal) | 18,908 | 5,341 | 2,155 | 26,404 |
+| **boxes** | **27,621** | **6,769** | **3,694** | **38,084** |
 
-`dog`, `cat`, `horse` and `small_livestock` have no boxes yet. Splits are balanced by
-images, not boxes, so box counts vary: one dense-herd flight puts many cattle boxes in val.
+`dog`, `cat`, `horse` and `small_livestock` have no boxes yet. `other_animal` is heavy in
+val because one dense herd video (medium-size animals) could only go to one split.
 
 ## Sources and licenses
 

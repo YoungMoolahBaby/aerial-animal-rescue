@@ -8,6 +8,9 @@ singletons (`group_by="sequence"`, the default, prints a warning count).
 Test rule: the test set is real images only. Synthetic images always go to
 train, so validation and test numbers measure real-world performance.
 
+Balance rule: groups are placed so that images AND boxes per class and object
+size each come out close to the split ratios (see assign_splits).
+
 Empty images (no boxes) can be thinned out of train only: val and test keep
 all of them, since false alarms on empty frames are part of what we measure.
 """
@@ -17,10 +20,13 @@ import shutil
 from itertools import zip_longest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from PIL import Image
 
+from aerial_animal_rescue.evaluate import SIZE_BUCKETS
 from aerial_animal_rescue.metadata import read_metadata, write_metadata
-from aerial_animal_rescue.yolo import label_path_for
+from aerial_animal_rescue.yolo import label_path_for, read_labels
 
 SPLIT_NAMES = ("train", "val", "test")
 
@@ -45,15 +51,19 @@ def assign_splits(
     ratios: tuple[float, float, float] = (0.7, 0.15, 0.15),
     seed: int = 0,
     group_by: str = "sequence",
-    weights: pd.Series | None = None,
+    weights: pd.Series | pd.DataFrame | None = None,
 ) -> pd.Series:
     """Return a split name per row. Whole groups go to one split.
 
-    Each real group is given to the split currently furthest below its target
-    share, largest groups first (ties shuffled by `seed`), which balances
-    uneven groups well. A group's size is the sum of `weights` over its rows
-    (default 1 per image; build_processed counts an empty image as 1/100, so a
-    long flight over empty pasture doesn't count as big). With
+    `weights` gives every row a size (default 1 per image), or several sizes as
+    DataFrame columns, e.g. images plus boxes per class and object size. Each
+    column is summed per group and scaled to shares of its total, and groups are
+    placed so every column comes out as close to `ratios` as possible (squared
+    error): greedily, largest groups first (ties shuffled by `seed`), then
+    improved by moving single groups and swapping pairs while that lowers the
+    error. Balancing images alone is not enough: sequences differ wildly in how
+    many boxes they hold and how small they are, so splits balanced by images
+    can still train on large animals and test on tiny ones. With
     `group_by="sequence"` this runs per source, so every source gets roughly
     `ratios` instead of a big source swamping a small one.
     """
@@ -64,27 +74,95 @@ def assign_splits(
     result = pd.Series("train", index=df.index, dtype=object)
 
     real = ~synthetic
-    weights = pd.Series(1, index=df.index) if weights is None else weights
+    weights = pd.Series(1.0, index=df.index) if weights is None else weights
+    weights = weights.to_frame() if isinstance(weights, pd.Series) else weights
     strata = df["source"].astype(str) if group_by == "sequence" else pd.Series("", index=df.index)
     group_split = {}
     for stratum in sorted(strata[real].unique()):
         rows = real & (strata == stratum)
         sizes = weights[rows].groupby(keys[rows]).sum().sort_index()
-        order = list(sizes.index)
+        sizes = sizes.loc[:, sizes.sum() > 0]
+        shares = (sizes / sizes.sum()).to_numpy(dtype=float)
+        order = list(range(len(sizes)))
         random.Random(f"{seed}/{stratum}").shuffle(order)
-        order.sort(key=lambda g: -sizes[g])  # stable: equal sizes keep the shuffled order
-        total = float(sizes.sum())
-        counts = dict.fromkeys(SPLIT_NAMES, 0)
-        for g in order:
-            split = max(SPLIT_NAMES, key=lambda s: ratios[SPLIT_NAMES.index(s)] * total - counts[s])
-            group_split[g] = split
-            counts[split] += float(sizes[g])
+        order.sort(key=lambda g: -shares[g].sum())  # stable: equal sizes keep the shuffled order
+        placed = _balance(shares, np.asarray(ratios, dtype=float), order)
+        group_split.update(zip(sizes.index, (SPLIT_NAMES[s] for s in placed), strict=True))
     result[real] = keys[real].map(group_split)
 
     mixed = set(keys[synthetic]) & set(group_split)
     if mixed:  # a group with both synthetic and real images: keep it out of val/test
         result[keys.isin(mixed)] = "train"
     return result
+
+
+def _balance(shares: np.ndarray, ratios: np.ndarray, order: list[int]) -> list[int]:
+    """Split index per group (rows of `shares`), minimising sum((split share - ratio)^2)."""
+    counts = np.zeros((len(ratios), shares.shape[1]))
+    placed = [0] * len(shares)
+
+    def cost(c: np.ndarray, s: int) -> float:
+        return float(((c - ratios[s]) ** 2).sum())
+
+    for g in order:  # greedy: for one column this is "the split furthest below its target"
+        s = min(
+            range(len(ratios)), key=lambda s: cost(counts[s] + shares[g], s) - cost(counts[s], s)
+        )
+        placed[g] = s
+        counts[s] += shares[g]
+
+    improved = True
+    while improved:
+        improved = False
+        for g in order:
+            a = placed[g]
+            for b in range(len(ratios)):  # move g from a to b
+                if b == a:
+                    continue
+                gain = (cost(counts[a], a) + cost(counts[b], b)) - (
+                    cost(counts[a] - shares[g], a) + cost(counts[b] + shares[g], b)
+                )
+                if gain > 1e-12:
+                    counts[a] -= shares[g]
+                    counts[b] += shares[g]
+                    placed[g], a, improved = b, b, True
+            for h in order:  # swap g and h
+                b = placed[h]
+                if b == a:
+                    continue
+                d = shares[h] - shares[g]
+                gain = (cost(counts[a], a) + cost(counts[b], b)) - (
+                    cost(counts[a] + d, a) + cost(counts[b] - d, b)
+                )
+                if gain > 1e-12:
+                    counts[a] += d
+                    counts[b] -= d
+                    placed[g], placed[h], a, improved = b, a, b, True
+    return placed
+
+
+def balance_columns(image_paths: pd.Series) -> pd.DataFrame:
+    """What assign_splits balances, per image: `with_boxes`, `empty`, and boxes per class and size.
+
+    Images with boxes and empty images are separate columns, so a long flight over
+    empty pasture doesn't count as big, yet val and test still get their share of
+    empty frames to measure false alarms on. Box columns are named
+    `<class id>/<size bucket>`, with the size buckets of the evaluation report
+    (box area in original pixels).
+    """
+    rows = []
+    for path in image_paths:
+        boxes = read_labels(label_path_for(path))
+        row = {"with_boxes": float(bool(boxes)), "empty": float(not boxes)}
+        if boxes:
+            with Image.open(path) as im:
+                w, h = im.size  # header only, no decode
+            for cls, _, _, bw, bh in boxes:
+                area = bw * w * bh * h
+                bucket = next(n for n, (lo, hi) in SIZE_BUCKETS.items() if lo <= area < hi)
+                row[f"{cls}/{bucket}"] = row.get(f"{cls}/{bucket}", 0) + 1
+        rows.append(row)
+    return pd.DataFrame(rows, index=image_paths.index).fillna(0.0)
 
 
 def sample_train_empty(
@@ -152,10 +230,9 @@ def build_processed(
     if not dupes.empty:
         raise ValueError(f"duplicate image_ids across pools, e.g. {dupes.iloc[0]!r}")
 
-    empty = df["src_path"].map(lambda p: not label_path_for(p).read_text().strip())
-    df["split"] = assign_splits(
-        df, ratios, seed, group_by, weights=empty.map({True: 0.01, False: 1.0})
-    )
+    balance = balance_columns(df["src_path"])
+    empty = balance["empty"] == 1
+    df["split"] = assign_splits(df, ratios, seed, group_by, weights=balance)
     if train_empty_frac is not None:
         keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by)
         print(

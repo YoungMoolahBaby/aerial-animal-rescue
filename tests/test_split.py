@@ -117,6 +117,51 @@ def test_build_processed_samples_empty_train_images(tmp_path, registry):
     assert (df[df["split"] != "train"]["image_id"].str[-1] != "0").any()  # val/test keep them
 
 
+def test_balances_every_weight_column_not_just_images():
+    # 20 flights of 5 images each; flights 0-7 hold all the tiny animals, flights 8-19
+    # the large ones. Balancing images alone can put every tiny-animal flight in train.
+    df = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    flight = df["sequence_id"].str[6:].astype(int)
+    weights = pd.DataFrame(
+        {
+            "images": 1.0,
+            "tiny": (flight < 8) * 10.0,
+            "large": (flight >= 8) * 10.0,
+        }
+    )
+    split = assign_splits(df, seed=0, weights=weights)
+    tiny_splits = set(split[flight < 8])
+    assert {"val", "test"} <= tiny_splits  # tiny animals reach val and test too
+    for col in ("tiny", "large"):
+        share = weights[col].groupby(split).sum() / weights[col].sum()
+        assert 0.5 <= share["train"] <= 0.8, (col, share.to_dict())
+
+
+def test_single_column_weights_match_series():
+    df = frame(n_flights=30, n_synthetic=0)
+    w = pd.Series(range(len(df)), index=df.index, dtype=float)
+    assert assign_splits(df, seed=2, weights=w).equals(
+        assign_splits(df, seed=2, weights=w.to_frame("images"))
+    )
+
+
+def test_balance_columns_count_boxes_by_class_and_size(tmp_path):
+    from PIL import Image
+
+    from aerial_animal_rescue.split import balance_columns
+
+    (tmp_path / "images").mkdir()
+    (tmp_path / "labels").mkdir()
+    for name, labels in (("a", "0 0.5 0.5 0.1 0.1\n6 0.5 0.5 0.5 0.5\n"), ("b", "")):
+        Image.new("L", (100, 100)).save(tmp_path / "images" / f"{name}.jpg")
+        (tmp_path / "labels" / f"{name}.txt").write_text(labels)
+    cols = balance_columns(pd.Series([tmp_path / "images" / f"{n}.jpg" for n in "ab"]))
+    assert cols["with_boxes"].tolist() == [1, 0]
+    assert cols["empty"].tolist() == [0, 1]
+    assert cols["0/tiny (<16px)"].tolist() == [1, 0]  # 10x10 px person
+    assert cols["6/medium (32-96px)"].tolist() == [1, 0]  # 50x50 px animal
+
+
 def test_each_source_is_split_on_its_own():
     big = frame(n_flights=60, frames_per_flight=10, n_synthetic=0)
     small = frame(n_flights=20, frames_per_flight=5, n_synthetic=0).assign(source="small")

@@ -32,8 +32,9 @@ def main() -> None:
     p.add_argument(
         "--train-empty-frac",
         type=float,
-        default=0.1,
-        help="max share of empty images in train (val/test keep all); -1 keeps all",
+        default=0.3,
+        help="max share of empty images in train (val/test keep all); -1 keeps all. "
+        "Empty frames teach the model not to fire on background, i.e. fewer false positives",
     )
     args = p.parse_args()
 

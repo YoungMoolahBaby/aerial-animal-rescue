@@ -12,6 +12,10 @@ file name: almost every video starts at 0, but 0000000011_0000000000 starts at
 87 (confirmed by box brightness peaking at that offset). Frames outside the
 first..last annotated frame are skipped, since we can't tell "empty" from
 "not annotated" there.
+
+Folders are named <video>_<clip>: video 0000000067 comes as 22 clips, every
+other video as one (_0000000000). The sequence id is the video, so all clips
+of one flight land in the same split.
 """
 
 import csv
@@ -49,7 +53,7 @@ def _frame_number(path: Path) -> int | None:
 def read_birdsai(
     annotations: Path, images: Path, frame_step: int = 1, **_
 ) -> Iterator[SourceImage]:
-    """Yield every `frame_step`-th frame of each video's annotated span (sequence id = video)."""
+    """Yield every `frame_step`-th frame of each clip's annotated span (sequence id = video)."""
     annotations, images = Path(annotations), Path(images)
     for csv_path in sorted(annotations.glob("*.csv")):
         video = csv_path.stem
@@ -73,4 +77,6 @@ def read_birdsai(
         span = range(min(boxes), max(boxes) + 1)
         kept = [n for n in sorted(frames) if n - first in span]
         for n in kept[::frame_step]:
-            yield SourceImage(path=frames[n], boxes=boxes.get(n - first, []), sequence_id=video)
+            yield SourceImage(
+                path=frames[n], boxes=boxes.get(n - first, []), sequence_id=video.split("_")[0]
+            )

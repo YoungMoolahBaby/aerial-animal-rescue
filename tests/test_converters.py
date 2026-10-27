@@ -82,6 +82,16 @@ def test_birdsai_frames_count_from_first_image(tmp_path):
     assert [len(i.boxes) for i in items] == [1, 0, 1]
 
 
+def test_birdsai_clips_of_one_video_share_a_sequence(tmp_path):
+    # video 0000000067 comes as many <video>_<clip> folders; they are one flight
+    (tmp_path / "ann").mkdir()
+    for clip in ("0000000067_0000000005", "0000000067_0000000058", "0000000010_0000000000"):
+        make_image(tmp_path / "images" / clip / f"{clip}_0000000000.jpg")
+        (tmp_path / "ann" / f"{clip}.csv").write_text("0,1,5,5,10,10,0,4,0,0\n")
+    items = list(read_birdsai(tmp_path / "ann", tmp_path / "images"))
+    assert sorted(i.sequence_id for i in items) == ["0000000010", "0000000067", "0000000067"]
+
+
 def test_yolo_reader_finds_cvat_labels_by_name(tmp_path):
     # ICAERUS layout: labels under obj_train_data/, in a differently named flight folder
     make_image(tmp_path / "img" / "flight_042" / "a.jpg", size=(100, 50))
