@@ -388,6 +388,38 @@ dog, boar).
     - Next, on what real val does measure: people (flights 361/362) with the Superhero
       bodies and the animation library, and wildlife models (elephant, giraffe, rhino,
       lion) for the BIRDSAI flights; plus the faint-target work for 361/61.
+  - v5, people (2026-10-28):
+    - Bodies: the free Superhero man and woman (Universal Base Characters, CC0).
+    - Clips: the Universal Animation Library (Standard, CC0, 43 clips on the same rig),
+      copied across by bone name (rotations, plus the pelvis height).
+    - Poses: 15 per body from idle, talking, walk, jog, crouch, crouch-walk, kneel, push
+      and lying (Death01). Sitting is left out because it sits on a chair. Swimming is
+      left out because people stand on the ground in the sim.
+    - Parts: head and neck are warm; arms, hands, calves and feet are limbs.
+    - Every model body now carries all poses of its kind's models, and each shot shows
+      one of them, picked by a hash of where the body stands. Before, each body had one
+      fixed pose per world. The pick needs no random draws.
+    - Model people skip the primitive's squash-to-sit and tip-to-lie, since their posture
+      is in the mesh. They draw the same random numbers, so shots stay identical to v3.
+    - `--body-kinds person` limits the models to people, so v5 against v3 changes only
+      the people.
+  - Result v5: same 4,000 shots as v3, only the people differ.
+
+    | | v3 capsule people | v5 model people |
+    |---|---|---|
+    | zero-shot (hituav) person found, tiny / small / medium | 15% / 34% / 18% | 13% / 30% / 18% |
+    | sim-only 6 epochs, real val person AP50 | 0.162 | 0.046 |
+    | flight 362 / 361 people AP50 | 0.774 / 0.007 | 0.506 / 0.003 |
+    | overall / thermal mAP50 | 0.087 / 0.133 | 0.054 / 0.089 |
+    | thermal alarms per empty frame, conf 0.25 | 0.93 | 0.78 |
+
+    - Worse on the one thing that changed, people, and the zero-shot agrees. Raw contrast
+      is the same (mean 47 vs 48 grey levels above the ground on 9 matched people), so
+      it's the shape.
+    - Likely reason: at 10-30 px a real thermal person (BIRDSAI at night, HIT-UAV) is a
+      compact bright blob. Thin limbs at limb temperature and sprawled poses (lying,
+      jogging, arms out) spread the body into a shape real people don't show at that size.
+    - Not kept: v3's capsule people stay. `--bodies` and `--body-kinds` stay as options.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
