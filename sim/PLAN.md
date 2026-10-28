@@ -461,6 +461,33 @@ dog, boar).
   - Next: weak tiny bodies (1.5-2x the ground's mottle at body scale, like 361), and,
     for 61, sunlit canopy (hot tops, cold shadows) with daytime bodies near the ground
     temperature.
+  - v7, faint bodies:
+    - In 40% of shots with bodies, each body stands out from the ground under it by
+      16-60 grey levels of the render (log), set from the shot's temperature span. A
+      fixed lead in degrees is bright in a cool field and invisible next to a hot roof.
+      Limbs and head keep their proportions to the torso.
+    - Drawn from a stream seeded by the aim point, so shots stay paired with v6.
+      `faint` column in `sim_params.csv`.
+    - Tuned on 200 frames to the 361 statistic: tiny/small targets at 1.59x the
+      background's p99 at body scale (361: 1.57; v6: 2.2); faint shots alone 1.38.
+  - Result v7 (sim-only, 6 epochs, real val; v6 in brackets):
+    - flight 361 people 0.007 (0.013), 61 animals 0.000 (0.000);
+    - person 0.096 (0.159), flight 362 0.587 (0.740);
+    - other_animal 0.156 (0.067), flight 352 0.277 (0.094);
+    - overall / thermal mAP50 0.084 / 0.127 (0.076 / 0.122);
+    - thermal alarms per empty frame 0.93 (0.34) at conf 0.25.
+    - Matching 361's statistics didn't move 361. The rest is a trade within the
+      proxy's noise, and alarms are back up.
+    - Not kept: `--faint-share` (default 0) keeps it as an option; datagen's default
+      output is v6 again, byte for byte.
+  - Where this leaves the faint flights:
+    - Four rounds (v4-v7) haven't moved 361 or 61 in the sim-only check, and the
+      real-only model scores 0 on 361 too.
+    - Next questions:
+      - Does v6 carry over in a mixed real+sim run (the only trustworthy judge)?
+      - Is 361 a detector-resolution limit rather than a data gap? Test with tiled,
+        zoomed-in inference on 361 with the existing models.
+    - 61 (sunlit canopy) is parked until those answer.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
