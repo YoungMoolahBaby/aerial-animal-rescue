@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aerial_animal_rescue.classes import ClassRegistry
 from aerial_animal_rescue.config import INTERIM_DIR, PROCESSED_DIR, SYNTHETIC_DIR
+from aerial_animal_rescue.sources import load_sources
 from aerial_animal_rescue.split import build_processed
 
 
@@ -42,6 +43,9 @@ def main() -> None:
     if not pools:
         raise SystemExit("no pools found: run convert_external / ingest_raw / composite first")
     print("pools:", ", ".join(str(x) for x in pools))
+    train_only = sorted(n for n, s in load_sources().items() if s.raw.get("train_only"))
+    if train_only:
+        print("train only (sources.yaml):", ", ".join(train_only))
     build_processed(
         pools,
         args.out,
@@ -51,6 +55,7 @@ def main() -> None:
         args.group_by,
         args.overwrite,
         None if args.train_empty_frac < 0 else args.train_empty_frac,
+        train_only,
     )
 
 

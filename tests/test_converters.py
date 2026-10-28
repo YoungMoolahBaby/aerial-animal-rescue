@@ -4,8 +4,13 @@ import pytest
 
 from aerial_animal_rescue.classes import ClassMapper
 from aerial_animal_rescue.converters import read_coco, read_voc, read_yolo, write_pool
-from aerial_animal_rescue.converters.base import SourceImage, drop_excluded
+from aerial_animal_rescue.converters.base import (
+    SourceImage,
+    drop_excluded,
+    drop_images_with_classes,
+)
 from aerial_animal_rescue.converters.birdsai import read_birdsai
+from aerial_animal_rescue.converters.hit_uav import read_hit_uav
 from aerial_animal_rescue.metadata import read_metadata
 from aerial_animal_rescue.yolo import read_labels
 from tests.conftest import make_image
@@ -120,3 +125,39 @@ def test_drop_excluded(tmp_path):
     assert [i.path.stem for i in drop_excluded(items, ["b"])] == ["a", "c"]
     with pytest.raises(ValueError, match="typo"):
         drop_excluded(items, ["b", "typo"])
+
+
+def test_hit_uav_reader_sequences_and_altitude(tmp_path):
+    # two videos at 60 m / 30 deg (serials jump by > RUN_GAP), one at 100 m / 30 deg
+    stems = ["1_60_30_0_00010", "1_60_30_0_00012", "1_60_30_0_04000", "0_100_30_0_00011"]
+    for stem in stems:
+        make_image(tmp_path / "img" / f"{stem}.jpg", size=(64, 48))
+        (tmp_path / "ann").mkdir(exist_ok=True)
+        (tmp_path / "ann" / f"{stem}.xml").write_text(
+            f"<annotation><filename>{stem}.jpg</filename></annotation>"
+        )
+    items = {i.path.stem: i for i in read_hit_uav(tmp_path / "ann", tmp_path / "img")}
+    seq = {s: i.sequence_id for s, i in items.items()}
+    assert seq["1_60_30_0_00010"] == seq["1_60_30_0_00012"] == "t1_60m_30deg_0"
+    assert seq["1_60_30_0_04000"] == "t1_60m_30deg_1"
+    assert seq["0_100_30_0_00011"] == "t0_100m_30deg_0"
+    assert items["0_100_30_0_00011"].altitude_m == 100.0
+
+
+def test_drop_images_with_classes(tmp_path):
+    items = [
+        SourceImage(path=tmp_path / "a.jpg", boxes=[("Person", 0, 0, 1, 1)]),
+        SourceImage(
+            path=tmp_path / "b.jpg", boxes=[("Person", 0, 0, 1, 1), ("DontCare", 0, 0, 1, 1)]
+        ),
+        SourceImage(path=tmp_path / "c.jpg"),
+    ]
+    kept, dropped = drop_images_with_classes(items, ["DontCare"])
+    assert [i.path.stem for i in kept] == ["a", "c"] and dropped == 1
+
+
+def test_write_pool_records_per_image_altitude(tmp_path, registry):
+    make_image(tmp_path / "src" / "a.png", size=(10, 10))
+    item = SourceImage(path=tmp_path / "src" / "a.png", altitude_m=80.0)
+    write_pool([item], ClassMapper(registry, {}), tmp_path / "pool", "demo", "CC0-1.0", "thermal")
+    assert read_metadata(tmp_path / "pool" / "metadata.csv").loc[0, "altitude_m"] == 80.0

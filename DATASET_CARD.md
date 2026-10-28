@@ -18,7 +18,7 @@ tags:
   - livestock
   - pets
 size_categories:
-  - 1K<n<10K  # update on each release
+  - 10K<n<100K  # update on each release
 ---
 
 # Aerial Animal Rescue
@@ -33,9 +33,10 @@ disasters.
 
 ## Dataset description
 
-The current build (2026-10-27, not yet released) has **11,228 real images** with
-38,084 boxes, from two third-party sources and no synthetic images yet: 9,852 thermal
-frames from BIRDSAI (88%) and 1,376 RGB drone photos of grazing cattle from ICAERUS (12%).
+The current build (2026-10-27, not yet released) has **14,023 real images** with
+48,942 boxes, from three third-party sources and no synthetic images yet: 9,852 thermal
+frames from BIRDSAI (70%), 2,795 thermal frames of people in towns and campuses from
+HIT-UAV (20%, train only), and 1,376 RGB drone photos of grazing cattle from ICAERUS (10%).
 It has no own footage, no flood scenes, and no pets or small livestock yet, so for now it
 covers people and wildlife in thermal and cattle on pasture in RGB.
 
@@ -74,8 +75,15 @@ size-and-class combinations held by a few dense videos stay uneven (most medium-
 BIRDSAI animals are in train and val). **The test set contains real images only.**
 Synthetic images are in train only.
 
-Empty images (no boxes) are sampled down to at most 30% of train, spread across flights,
-so the model learns not to fire on background. Val and test keep every empty image, so
+HIT-UAV is in train only, in full. Its file names give the video but not the place, and
+neighbouring videos film the same place from another angle, so any val or test share
+would leak near-duplicates. It is also left out of the empty-image sampling below, so
+adding it changed nothing else: train, val and test of the other sources are image for
+image the same as in the build before it.
+
+Empty images (no boxes) are sampled down to at most 30% of train (BIRDSAI and ICAERUS),
+spread across flights, so the model learns not to fire on background. HIT-UAV keeps all
+of its 1,189 images without people (streets, cars, parked bikes). Val and test keep every empty image, so
 their numbers include false alarms on empty ground, which is most of what a search drone
 sees.
 
@@ -88,14 +96,16 @@ Counts for the current build (from `scripts/validate_dataset.py`):
 
 | | train | val | test | total |
 |---|---:|---:|---:|---:|
-| images, thermal | 6,739 | 1,737 | 1,376 | 9,852 |
-| images, RGB | 986 | 197 | 193 | 1,376 |
-| **images** | **7,725** | **1,934** | **1,569** | **11,228** |
-| of which empty | 2,317 (30%) | 592 (31%) | 571 (36%) | 3,480 |
-| boxes, `person` (thermal) | 5,397 | 670 | 878 | 6,945 |
+| images, thermal (BIRDSAI) | 6,739 | 1,737 | 1,376 | 9,852 |
+| images, thermal (HIT-UAV) | 2,795 | | | 2,795 |
+| images, RGB (ICAERUS) | 986 | 197 | 193 | 1,376 |
+| **images** | **10,520** | **1,934** | **1,569** | **14,023** |
+| of which empty | 3,506 (33%) | 592 (31%) | 571 (36%) | 4,669 |
+| boxes, `person` (thermal) | 16,255 | 670 | 878 | 17,803 |
+| of which HIT-UAV | 10,858 | | | 10,858 |
 | boxes, `cattle` (RGB) | 3,316 | 758 | 661 | 4,735 |
 | boxes, `other_animal` (thermal) | 18,908 | 5,341 | 2,155 | 26,404 |
-| **boxes** | **27,621** | **6,769** | **3,694** | **38,084** |
+| **boxes** | **38,479** | **6,769** | **3,694** | **48,942** |
 
 `dog`, `cat`, `horse` and `small_livestock` have no boxes yet. `other_animal` is heavy in
 val because one dense herd video (medium-size animals) could only go to one split.
@@ -110,6 +120,8 @@ non-commercial.
 | own | our drone footage | CC-BY-4.0 | this dataset |
 | synthetic | composites (FloodNet backgrounds + cutouts) | see per-image | this dataset + inputs |
 | birdsai | thermal night video frames from a fixed-wing drone over protected areas in Africa: people, elephants, giraffes, lions, dogs, unknown animals ([LILA BC](https://lila.science/datasets/conservationdrones)) | [CDLA-Permissive-1.0](https://cdla.dev/permissive-1-0/) | Bondi et al., "BIRDSAI: A Dataset for Detection and Tracking in Aerial Thermal Infrared Videos", WACV 2020 |
+| icaerus_cows | RGB drone photos of grazing cows and calves on French farms ([Zenodo](https://zenodo.org/records/11048412)) | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) | Helary & Lebreton, "Drone images and their annotations of grazing cows", Zenodo, doi:10.5281/zenodo.11048412 |
+| hit_uav | thermal frames (640x512) of people from 60-130 m over campuses, streets and parking lots, day and night ([GitHub](https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset)) | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) (the Zenodo copy says CC0; we follow the stricter one) | Suo et al., "HIT-UAV: A high-altitude infrared thermal dataset for Unmanned Aerial Vehicle-based object detection", Scientific Data 10, 227 (2023) |
 
 Fill this from `configs/sources.yaml` for every source in this release.
 
@@ -126,15 +138,22 @@ Fill this from `configs/sources.yaml` for every source in this release.
     including the source's "dog", becomes `other_animal`: the footage is from African
     reserves, so these are likely wild dogs or ranger dogs, not the domestic dogs our `dog`
     class means.
+  - **ICAERUS:** cows and calves become `cattle`. 9 photos showing people without boxes
+    are left out, since they would teach the model that people are background.
+  - **HIT-UAV:** `Person` becomes `person`; cars, other vehicles and bicycles are dropped
+    (the bicycles are parked, with no rider; the few riders have their own person box).
+    The 103 images with a "DontCare" box are left out: those boxes mostly cover groups
+    of people that were not boxed one by one. Video and altitude come from the file names.
 - **Synthetic:** segmented animal cutouts pasted onto disaster backgrounds, with random
   scale, rotation, brightness, blur, rain and noise. Labels come from the cutout masks.
 - **Annotation:** TODO (tool, guidelines, who annotated, how it was quality-checked).
 
 ## Known limitations
 
-- Small dataset with strong class imbalance: `other_animal` is 69% of boxes, `person`
-  18%, `cattle` 12%, and `dog`, `cat`, `horse` and `small_livestock` 0% in the current
-  build. Each class also comes from one modality only (people and wildlife thermal,
+- Small dataset with strong class imbalance: `other_animal` is 54% of boxes, `person`
+  36%, `cattle` 10%, and `dog`, `cat`, `horse` and `small_livestock` 0% in the current
+  build. Most `person` boxes (61%) come from HIT-UAV, which is in train only, so val and
+  test measure people in BIRDSAI footage alone. Each class also comes from one modality only (people and wildlife thermal,
   cattle RGB), so the model can learn modality as a shortcut for class.
 - Imported datasets come from different regions, sensors and altitudes. Thermal data mostly
   comes from non-disaster scenes: BIRDSAI is night-time footage of African bushland, not
@@ -152,8 +171,8 @@ Fill this from `configs/sources.yaml` for every source in this release.
   are stored.
 - **People:** people can appear (class `person`). Our own images are reviewed before
   publishing so that no one is identifiable (faces, plates, house numbers). In third-party
-  data such as BIRDSAI, people are small heat signatures in low-resolution thermal video
-  shot from altitude, with no identifiable detail.
+  data such as BIRDSAI and HIT-UAV, people are small heat signatures in low-resolution
+  thermal video shot from altitude, with no identifiable detail.
 - **Consent:** our footage was taken with the permission of the property and animal owners,
   in line with local drone regulations.
 - **Intended use:** research and tools for animal search and rescue, and disaster response.

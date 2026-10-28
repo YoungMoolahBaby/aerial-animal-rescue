@@ -20,6 +20,9 @@
 #                  Classes not listed are dropped and logged.
 #   exclude        image file names (no extension) to leave out, with the reason in a
 #                  comment; conversion fails if a name matches no image
+#   exclude_classes  source class names whose images are left out entirely (e.g. a
+#                  "DontCare" box that may hide unlabelled objects of ours)
+#   train_only     true -> every image of this source goes to train (see split.py)
 
 sources:
   birdsai:
@@ -152,22 +155,35 @@ sources:
     url: https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset
     files:
       - https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset/archive/refs/heads/main.zip
-    download: automatic
-    size_gb: 0.41
+    download: automatic  # GitHub sends no size, so the script asks; 0.83 GB on 2026-10-27
+    size_gb: 0.83
+    # The repo's LICENSE file is CC BY 4.0; the Zenodo copy (doi:10.5281/zenodo.7633134)
+    # says CC0. We follow the stricter one.
     license: CC-BY-4.0
     redistribution: allowed
     role: annotations  # people + thermal negatives; no animals
     modality: thermal
+    # 640x512 thermal from 60-130 m: people are blobs of 5-30 px with no identifying detail
     contains_people: true
     citation: 'Suo et al., "HIT-UAV: A high-altitude infrared thermal dataset for Unmanned Aerial Vehicle-based object detection", Scientific Data 10, 227 (2023)'
+    # Whole source goes to train: the file names give the video but not the place, and
+    # neighbouring videos film the same place from another angle (checked visually), so
+    # any val/test share would leak. It also keeps val/test identical to the build before.
+    train_only: true
+    # DontCare boxes (148 in 103 images) are mostly groups of people not boxed one by one
+    # (checked visually 2026-10-27); keeping those images would teach people = background.
+    exclude_classes: [DontCare]
     converter:
-      format: voc  # normal_xml; its COCO json uses a non-standard "annotation" key
-      # TODO: confirm after unzipping (folder names from the repo README).
-      images: TODO
-      annotations: TODO
+      # Only normal_xml/ is unzipped (rotate_*, *_json and yolo_labels/ are the same
+      # boxes in other formats). Sequence id and altitude come from the file names.
+      format: hit_uav
+      images: HIT-UAV-Infrared-Thermal-Dataset-main/normal_xml/JPEGImages
+      annotations: HIT-UAV-Infrared-Thermal-Dataset-main/normal_xml/Annotations
     class_map:
       Person: person
       Car: null
+      # Checked visually 2026-10-27: Bicycle boxes are parked bikes (cold, no rider);
+      # the few riders have their own Person box.
       Bicycle: null
       OtherVehicle: null
       DontCare: null

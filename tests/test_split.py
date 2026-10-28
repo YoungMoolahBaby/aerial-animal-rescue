@@ -171,3 +171,28 @@ def test_each_source_is_split_on_its_own():
         counts = split[df["source"] == source].value_counts(normalize=True)
         assert set(counts.index) == {"train", "val", "test"}
         assert 0.6 <= counts["train"] <= 0.8, (source, counts.to_dict())
+
+
+def test_train_only_source_leaves_other_splits_unchanged():
+    base = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    extra = frame(n_flights=10, frames_per_flight=5, n_synthetic=0).assign(source="extra")
+    extra["image_id"] = "x" + extra["image_id"]
+    df = pd.concat([base, extra], ignore_index=True)
+    split = assign_splits(df, seed=0, train_only=["extra"])
+    assert (split[df["source"] == "extra"] == "train").all()
+    assert split[df["source"] == "own"].tolist() == assign_splits(base, seed=0).tolist()
+
+
+def test_train_only_source_is_kept_whole_and_not_counted_for_empties():
+    base = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    extra = frame(n_flights=10, frames_per_flight=5, n_synthetic=0).assign(source="extra")
+    extra["image_id"] = "x" + extra["image_id"]
+    df = pd.concat([base, extra], ignore_index=True)
+    df["split"] = assign_splits(df, seed=0, train_only=["extra"])
+    empty = pd.Series([k % 5 != 0 for k in range(len(df))], index=df.index)
+    keep = sample_train_empty(df, empty, frac=0.1, seed=0, train_only=["extra"])
+    assert keep[df["source"] == "extra"].all()
+    alone = base.assign(split=assign_splits(base, seed=0))
+    own = (df["source"] == "own").to_numpy()
+    expected = sample_train_empty(alone, empty[own].reset_index(drop=True), frac=0.1, seed=0)
+    assert keep[own].tolist() == expected.tolist()

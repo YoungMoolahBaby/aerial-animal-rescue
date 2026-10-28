@@ -15,7 +15,7 @@ from pathlib import Path
 from aerial_animal_rescue.classes import ClassMapper, ClassRegistry
 from aerial_animal_rescue.config import EXTERNAL_DIR, INTERIM_DIR
 from aerial_animal_rescue.converters import READERS, write_pool
-from aerial_animal_rescue.converters.base import drop_excluded
+from aerial_animal_rescue.converters.base import drop_excluded, drop_images_with_classes
 from aerial_animal_rescue.metadata import SCENE_TYPES
 from aerial_animal_rescue.sources import load_sources
 
@@ -57,6 +57,10 @@ def main() -> None:
     if exclude:
         items = drop_excluded(items, exclude)
         print(f"{src.name}: excluded {len(exclude)} images listed in sources.yaml")
+    exclude_classes = src.raw.get("exclude_classes") or []
+    if exclude_classes:
+        items, dropped = drop_images_with_classes(items, exclude_classes)
+        print(f"{src.name}: excluded {dropped} images with a box of {exclude_classes}")
     write_pool(
         items,
         ClassMapper(ClassRegistry.from_yaml(), src.class_map),

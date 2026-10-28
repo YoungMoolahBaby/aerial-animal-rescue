@@ -17,6 +17,7 @@ all of them, since false alarms on empty frames are part of what we measure.
 
 import random
 import shutil
+from collections.abc import Iterable
 from itertools import zip_longest
 from pathlib import Path
 
@@ -52,8 +53,12 @@ def assign_splits(
     seed: int = 0,
     group_by: str = "sequence",
     weights: pd.Series | pd.DataFrame | None = None,
+    train_only: Iterable[str] = (),
 ) -> pd.Series:
     """Return a split name per row. Whole groups go to one split.
+
+    Synthetic images and sources named in `train_only` always go to train and play no
+    part in balancing, so adding such a source leaves val/test exactly as they were.
 
     `weights` gives every row a size (default 1 per image), or several sizes as
     DataFrame columns, e.g. images plus boxes per class and object size. Each
@@ -73,7 +78,7 @@ def assign_splits(
     synthetic = df["synthetic"].astype(bool)
     result = pd.Series("train", index=df.index, dtype=object)
 
-    real = ~synthetic
+    real = ~synthetic & ~df["source"].isin(set(train_only))
     weights = pd.Series(1.0, index=df.index) if weights is None else weights
     weights = weights.to_frame() if isinstance(weights, pd.Series) else weights
     strata = df["source"].astype(str) if group_by == "sequence" else pd.Series("", index=df.index)
@@ -171,15 +176,18 @@ def sample_train_empty(
     frac: float,
     seed: int = 0,
     group_by: str = "sequence",
+    train_only: Iterable[str] = (),
 ) -> pd.Series:
     """Rows to keep so empty images are at most `frac` of train; other splits untouched.
 
     Empty train images are taken round-robin across groups (flights), each group
     shuffled by `seed`, so the kept backgrounds come from as many flights as possible.
+    Sources in `train_only` are kept whole and left out of the count, so adding one
+    doesn't change which images of the other sources are kept.
     """
     if not 0 <= frac < 1:
         raise ValueError(f"frac must be in [0, 1), got {frac}")
-    train = df["split"] == "train"
+    train = (df["split"] == "train") & ~df["source"].isin(set(train_only))
     candidates = train & empty
     n_keep = int(frac * int((train & ~empty).sum()) / (1 - frac))
     keys = group_keys(df[candidates], group_by, warn=False)
@@ -203,11 +211,13 @@ def build_processed(
     group_by: str = "sequence",
     overwrite: bool = False,
     train_empty_frac: float | None = None,
+    train_only: Iterable[str] = (),
 ) -> pd.DataFrame:
     """Merge pools (each with metadata.csv, images/, labels/), split, copy into `out_dir`.
 
     Images without a label file are not annotated yet and are skipped. With
     `train_empty_frac`, empty images are sampled down to that share of train.
+    Sources in `train_only` go to train in full (see assign_splits).
     """
     out_dir = Path(out_dir)
     for sub in ("images", "labels"):
@@ -232,9 +242,9 @@ def build_processed(
 
     balance = balance_columns(df["src_path"])
     empty = balance["empty"] == 1
-    df["split"] = assign_splits(df, ratios, seed, group_by, weights=balance)
+    df["split"] = assign_splits(df, ratios, seed, group_by, weights=balance, train_only=train_only)
     if train_empty_frac is not None:
-        keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by)
+        keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by, train_only)
         print(
             f"train: kept {int((keep & empty & (df['split'] == 'train')).sum())} of "
             f"{int((empty & (df['split'] == 'train')).sum())} empty images"

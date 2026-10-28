@@ -94,7 +94,7 @@ an image enters the pipeline, and the validator checks for leftovers.
 
 - [x] Repo, schema, pipeline tooling, tests, CI
 - [ ] Confirm third-party licenses and layouts (see TODOs in `configs/sources.yaml`)
-- [ ] Convert HIT-UAV, BIRDSAI and ICAERUS into the shared schema
+- [x] Convert HIT-UAV, BIRDSAI and ICAERUS into the shared schema
 - [ ] Collect our first flood/pasture flights (RGB and thermal), with permission from owners
 - [ ] Annotation workflow (CVAT or Label Studio) and labeling guide
 - [ ] Top-down animal cutouts (SAM-assisted) for compositing; thermal composites

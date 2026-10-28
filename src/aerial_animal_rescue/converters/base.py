@@ -24,6 +24,7 @@ class SourceImage:
     sequence_id: str | None = None
     width: int | None = None  # read from the file when not given
     height: int | None = None
+    altitude_m: float | None = None  # per image, when the source records it
 
 
 def drop_excluded(items: Iterable[SourceImage], names: Iterable[str]) -> list[SourceImage]:
@@ -37,6 +38,19 @@ def drop_excluded(items: Iterable[SourceImage], names: Iterable[str]) -> list[So
     if found != names:
         raise ValueError(f"exclude list names images that don't exist: {sorted(names - found)}")
     return [i for i in items if i.path.stem not in names]
+
+
+def drop_images_with_classes(
+    items: Iterable[SourceImage], names: Iterable[str]
+) -> tuple[list[SourceImage], int]:
+    """Remove images holding a box of any source class in `names`; returns (kept, dropped).
+
+    For classes like "DontCare" that may hide our objects: dropping only the box would
+    leave them unlabelled, which teaches the model they are background.
+    """
+    names, items = set(names), list(items)
+    kept = [i for i in items if not any(b[0] in names for b in i.boxes)]
+    return kept, len(items) - len(kept)
 
 
 def safe_id(text: str) -> str:
@@ -90,6 +104,7 @@ def write_pool(
                 modality=modality,
                 sequence_id=item.sequence_id,
                 **record_defaults,
+                **({"altitude_m": item.altitude_m} if item.altitude_m is not None else {}),
             )
         )
     write_metadata(records, out_dir / "metadata.csv")
