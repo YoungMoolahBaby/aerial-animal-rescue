@@ -60,7 +60,7 @@ impl Conditions {
             cooling_c: if night { rng.range(1.0, 6.0) } else { 0.0 },
             patch_c: rng.range(0.3, 3.0),
             texture: rng.range(0.02, 0.2),
-            speckle: rng.range(0.0, 0.25),
+            speckle: rng.range(0.0, 0.12),
             texture_seed: rng.next_u64(),
             water,
         }
@@ -215,8 +215,10 @@ pub fn texture_gain() -> f32 {
 
 /// Fine ground texture as sRGB bytes (`size` x `size`, tiling) around `TEXTURE_BASE`:
 /// smooth patches pull the ground's grey down by up to `amount`, and sparse specks a few
-/// texels across push it up or down by up to `speckle` (tufts, small shrubs, mounds: the
-/// pixel-scale clutter real frames are full of).
+/// texels across change it by up to `speckle` (tufts, small shrubs, mounds: the
+/// pixel-scale clutter real frames are full of). Most specks are cold; the warm ones are
+/// wider, fainter patches. Sharp warm dots taught a sim-only model that a tiny warm dot
+/// is background, which wiped out its tiny-object recall on real data (v2, 2026-10-28).
 pub fn ground_texture(seed: u64, size: usize, amount: f64, speckle: f64) -> Vec<u8> {
     let cells = 24.0; // features about 1/24 of the tile, a few pixels each in the picture
     let mut val: Vec<f64> = Vec::with_capacity(size * size);
@@ -230,9 +232,11 @@ pub fn ground_texture(seed: u64, size: usize, amount: f64, speckle: f64) -> Vec<
     let mut rng = Rng::new(seed ^ 0x5BEC);
     for _ in 0..size * size / 1500 {
         let (cx, cy) = (rng.range(0.0, size as f64), rng.range(0.0, size as f64));
-        let r = rng.range(1.5, 5.0);
-        let sign = if rng.chance(0.6) { 1.0 } else { -1.0 };
-        let amp = sign * speckle * rng.range(0.3, 1.0);
+        let (r, amp) = if rng.chance(0.25) {
+            (rng.range(5.0, 10.0), speckle * rng.range(0.2, 0.5))
+        } else {
+            (rng.range(1.5, 5.0), -speckle * rng.range(0.3, 1.0))
+        };
         let reach = r.ceil() as i64 + 1;
         for dy in -reach..=reach {
             for dx in -reach..=reach {
