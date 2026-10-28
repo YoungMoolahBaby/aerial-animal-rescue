@@ -72,7 +72,7 @@ fn controls(
         shot.pitch_deg,
         shot.n_targets(),
     );
-    ctl.apply(&shot, &world);
+    ctl.apply(&shot);
 }
 
 fn arg(name: &str) -> Option<u64> {

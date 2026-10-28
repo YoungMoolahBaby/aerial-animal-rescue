@@ -4,7 +4,8 @@
 //! Order follows the camera: optics blur, then noise and fixed-pattern stripes in raw
 //! counts, then auto-gain (a percentile stretch, the main reason the same scene looks
 //! different from frame to frame), then output noise and 8-bit output. Compression happens
-//! when the image is saved (JPEG quality is part of the parameters).
+//! when the image is saved (JPEG quality is part of the parameters), and half the frames
+//! first go through video-style compression; 40% are interlaced.
 //!
 //! The ranges span clean frames (HIT-UAV: noise ~1 grey level, crisp edges) to the hard
 //! BIRDSAI flights (noise 5-6 levels, in blotches a few pixels across, that survive the
@@ -21,6 +22,15 @@ pub struct SensorParams {
     /// length in pixels (0 = none) and direction in radians.
     pub motion_px: f32,
     pub motion_dir: f32,
+    /// Interlaced video: odd rows come from the second field, shifted sideways by this
+    /// many pixels as the aircraft moves (0 = progressive). Gives the combed edges of
+    /// the BIRDSAI frames.
+    pub interlace_px: f32,
+    /// Video compression before the frame is saved: JPEG round trip at this quality
+    /// (blocky, smears fine noise into blotches), or none.
+    pub video_quality: Option<u8>,
+    /// Noise added after compression (the video link and digitiser), grey levels.
+    pub link_noise: f32,
     /// Temporal noise in raw grey levels (0-255 scale, before auto-gain).
     pub noise: f32,
     /// Noise in output grey levels, after auto-gain. Real footage shows 1-6 levels of
@@ -53,6 +63,14 @@ impl SensorParams {
                 0.0
             },
             motion_dir: rng.range(0.0, std::f64::consts::PI) as f32,
+            interlace_px: if rng.chance(0.4) {
+                rng.range(1.0, 3.0) as f32
+            } else {
+                0.0
+            },
+            // gentler than it looks: quality < 40 wiped out the noise real recordings keep
+            video_quality: rng.chance(0.5).then(|| rng.range(40.0, 80.0) as u8),
+            link_noise: rng.range(0.3, 2.0) as f32,
             noise: rng.range(0.2, 0.8) as f32,
             out_noise: log_range(rng, 0.8, 8.0),
             blotch: log_range(rng, 0.3, 6.0),
@@ -80,7 +98,8 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
     assert_eq!(raw.len(), width * height);
     let img: Vec<f32> = raw.iter().map(|&v| v as f32).collect();
     let img = blur(&img, width, height, p.blur_sigma);
-    let mut img = smear(&img, width, height, p.motion_px, p.motion_dir);
+    let img = smear(&img, width, height, p.motion_px, p.motion_dir);
+    let mut img = interlace(&img, width, height, p.interlace_px);
     let cols: Vec<f32> = (0..width)
         .map(|_| p.fpn_col * rng.normal() as f32)
         .collect();
@@ -96,13 +115,59 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
     );
     let gain = (p.out_hi - p.out_lo) / (hi - lo).max(1.0);
     let blotches = unit_blotches(width, height, p.blotch_px, rng);
-    img.iter()
+    let out: Vec<u8> = img
+        .iter()
         .zip(&blotches)
         .map(|(&v, &b)| {
             let out = p.out_lo + (v - lo) * gain + p.out_noise * rng.normal() as f32 + p.blotch * b;
             out.round().clamp(0.0, 255.0) as u8
         })
-        .collect()
+        .collect();
+    match p.video_quality {
+        Some(q) => jpeg_round_trip(&out, width, height, q)
+            .into_iter()
+            .map(|v| {
+                (v as f32 + p.link_noise * rng.normal() as f32)
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            })
+            .collect(),
+        None => out,
+    }
+}
+
+/// Shift every odd row sideways by `px` pixels (rounded), clamping at the edges.
+pub fn interlace(img: &[f32], width: usize, height: usize, px: f32) -> Vec<f32> {
+    let shift = px.round() as isize;
+    if shift == 0 {
+        return img.to_vec();
+    }
+    let mut out = img.to_vec();
+    for y in (1..height).step_by(2) {
+        for x in 0..width {
+            let sx = (x as isize - shift).clamp(0, width as isize - 1) as usize;
+            out[y * width + x] = img[y * width + sx];
+        }
+    }
+    out
+}
+
+/// Encode as JPEG at `quality` and decode again.
+pub fn jpeg_round_trip(grey: &[u8], width: usize, height: usize, quality: u8) -> Vec<u8> {
+    use image::codecs::jpeg::JpegEncoder;
+    let mut buf = Vec::new();
+    JpegEncoder::new_with_quality(&mut buf, quality)
+        .encode(
+            grey,
+            width as u32,
+            height as u32,
+            image::ExtendedColorType::L8,
+        )
+        .expect("encode JPEG");
+    image::load_from_memory(&buf)
+        .expect("decode JPEG")
+        .to_luma8()
+        .into_raw()
 }
 
 /// Average along a line of `length` pixels in direction `dir` (motion blur), sampled every
@@ -205,6 +270,9 @@ mod tests {
             blur_sigma: 0.0,
             motion_px: 0.0,
             motion_dir: 0.0,
+            interlace_px: 0.0,
+            video_quality: None,
+            link_noise: 0.0,
             noise: 0.0,
             out_noise: 0.0,
             blotch: 0.0,
@@ -230,6 +298,29 @@ mod tests {
         assert!(s[39] > 0.0 && s[41] > 0.0);
         assert_eq!(s[31], 0.0); // nothing above
         assert!((s.iter().sum::<f32>() - 9.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn interlace_shifts_odd_rows_only() {
+        let img: Vec<f32> = (0..4 * 3).map(|k| (k % 4) as f32).collect(); // 4 wide, 3 high
+        let out = interlace(&img, 4, 3, 1.0);
+        assert_eq!(&out[0..4], &[0.0, 1.0, 2.0, 3.0]);
+        assert_eq!(&out[4..8], &[0.0, 0.0, 1.0, 2.0]);
+        assert_eq!(&out[8..12], &[0.0, 1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn jpeg_round_trip_keeps_size_and_roughly_values() {
+        let img: Vec<u8> = (0..64 * 64).map(|k| (k % 64 * 4) as u8).collect();
+        let out = jpeg_round_trip(&img, 64, 64, 30);
+        assert_eq!(out.len(), img.len());
+        let err: f64 = img
+            .iter()
+            .zip(&out)
+            .map(|(&a, &b)| (a as f64 - b as f64).abs())
+            .sum::<f64>()
+            / img.len() as f64;
+        assert!(err < 10.0, "{err}");
     }
 
     #[test]

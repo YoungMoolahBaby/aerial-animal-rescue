@@ -22,7 +22,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::Msaa;
 
 use crate::rng::Rng;
-use crate::thermal::{Conditions, TempWindow, ground_texture};
+use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
 use crate::world::Terrain;
 
 /// Frame size of the thermal cameras in our real data (HIT-UAV, most BIRDSAI flights).
@@ -32,7 +32,7 @@ pub const IMAGE_H: u32 = 512;
 /// about 20 deg).
 pub const VFOV_DEG: (f64, f64) = (12.0, 37.0);
 /// Red step between target ids in the id render.
-pub const ID_STEP: u8 = 10;
+pub const ID_STEP: u8 = 8;
 /// Terrain: wide enough that oblique views from 130 m don't see past its edge.
 pub const TERRAIN_M: f64 = 1600.0;
 const CELL_M: f64 = 2.5;
@@ -61,14 +61,17 @@ const CLUTTER: [(ClutterKind, usize); 4] = [
 ];
 
 /// What the pool of bodies holds; datagen picks from it per shot.
-pub const POOL: [(Kind, usize); 7] = [
+pub const POOL: [(Kind, usize); 10] = [
     (Kind::Person, 6),
-    (Kind::Cattle, 4),
+    (Kind::Cattle, 3),
     (Kind::Horse, 2),
     (Kind::Deer, 3),
-    (Kind::Sheep, 4),
+    (Kind::Sheep, 3),
     (Kind::Dog, 2),
     (Kind::Boar, 2),
+    (Kind::Elephant, 3),
+    (Kind::Giraffe, 3),
+    (Kind::Lion, 2),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,6 +83,10 @@ pub enum Kind {
     Sheep,
     Dog,
     Boar,
+    // wildlife, as in the thermal BIRDSAI flights (all `other_animal`)
+    Elephant,
+    Giraffe,
+    Lion,
 }
 
 impl Kind {
@@ -91,7 +98,7 @@ impl Kind {
             Kind::Horse => 3,
             Kind::Cattle => 4,
             Kind::Sheep => 5,
-            Kind::Deer | Kind::Boar => 6,
+            Kind::Deer | Kind::Boar | Kind::Elephant | Kind::Giraffe | Kind::Lion => 6,
         }
     }
 }
@@ -120,6 +127,9 @@ fn quadruped(kind: Kind) -> Quadruped {
         Kind::Sheep => q(1.0, 0.27, 0.42, 0.12, 0.15),
         Kind::Dog => q(0.75, 0.13, 0.38, 0.1, 0.2),
         Kind::Boar => q(1.2, 0.28, 0.38, 0.17, 0.0),
+        Kind::Elephant => q(3.2, 0.85, 1.3, 0.55, 0.1),
+        Kind::Giraffe => q(2.0, 0.45, 1.7, 0.22, 2.0),
+        Kind::Lion => q(1.7, 0.3, 0.65, 0.22, 0.15),
         Kind::Person => unreachable!("people aren't quadrupeds"),
     }
 }
@@ -194,12 +204,18 @@ impl Road {
 #[derive(Component)]
 pub struct AerialCamera;
 
+/// Parts of a body with their own temperature: thin limbs lose heat, the head is warm.
+const TORSO: usize = 0;
+const LIMB: usize = 1;
+const HEAD: usize = 2;
+
 /// A body we label. `id` is 1-based and is its colour in the id render.
 #[derive(Component)]
 pub struct Target {
     pub kind: Kind,
     pub id: u32,
-    thermal: Handle<StandardMaterial>,
+    /// Thermal materials of its torso, limbs and head.
+    thermal: [Handle<StandardMaterial>; 3],
 }
 
 #[derive(Component)]
@@ -231,7 +247,8 @@ pub struct SceneHandles {
 #[derive(Clone, Debug)]
 pub struct Placement {
     pub transform: Transform,
-    pub temp_c: f64,
+    /// Torso, limbs, head.
+    pub temp_c: [f64; 3],
 }
 
 /// One random shot: camera, lens, conditions and where everything stands, drawn from the
@@ -312,10 +329,13 @@ impl Shot {
                         cz + rng.range(-group_r, group_r),
                     );
                     let feet = Vec3::new(x as f32, terrain.height(x, z) as f32, z as f32);
-                    let temp_c = conditions.body_c(rng, ground_at(x, z), kind == Kind::Person);
+                    let ground = ground_at(x, z);
+                    let torso = conditions.body_c(rng, ground, kind == Kind::Person);
+                    let limb = ground + (torso - ground) * rng.range(0.5, 0.85);
+                    let head = ground + (torso - ground) * rng.range(1.0, 1.2);
                     Placement {
                         transform: pose(rng, kind, feet),
-                        temp_c,
+                        temp_c: [torso, limb, head],
                     }
                 })
             })
@@ -417,7 +437,7 @@ impl Shot {
                 .copied()
                 .chain(clutter_c.iter().flatten().copied())
                 .chain([road_c])
-                .chain(targets.iter().flatten().map(|p| p.temp_c))
+                .chain(targets.iter().flatten().flat_map(|p| p.temp_c))
                 .chain(conditions.water.map(|w| w.1)),
         );
         Self {
@@ -577,10 +597,12 @@ pub fn spawn_scene(
     // colours scale it, red stays 0.
     let background = unlit(mats, Color::srgb(0.0, 1.0, 0.0));
 
-    let texture = images.add(texture_image(ground_texture(world.seed, TEX_SIZE, 0.1)));
+    let texture = images.add(texture_image(ground_texture(
+        world.seed, TEX_SIZE, 0.1, 0.0,
+    )));
     let terrain_mesh = meshes.add(terrain_mesh(world));
     let ground = mats.add(StandardMaterial {
-        base_color: Color::WHITE,
+        base_color: Color::linear_rgb(texture_gain(), texture_gain(), texture_gain()),
         base_color_texture: Some(texture.clone()),
         unlit: true,
         cull_mode: None,
@@ -665,9 +687,9 @@ pub fn spawn_scene(
 
     for (k, &kind) in kinds.iter().enumerate() {
         let id = k as u32 + 1;
-        let thermal = unlit(mats, Color::WHITE);
+        let thermal = [(); 3].map(|_| unlit(mats, Color::WHITE));
         let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
-        let parts = body_parts(meshes, kind);
+        let parts = body_parts(meshes, &mut shapes, kind);
         commands
             .spawn((
                 Transform::default(),
@@ -679,13 +701,13 @@ pub fn spawn_scene(
                 },
             ))
             .with_children(|body| {
-                for (mesh, tf) in parts {
+                for (mesh, tf, part) in parts {
                     body.spawn((
                         Mesh3d(mesh),
-                        MeshMaterial3d(thermal.clone()),
+                        MeshMaterial3d(thermal[part].clone()),
                         tf,
                         Look {
-                            thermal: thermal.clone(),
+                            thermal: thermal[part].clone(),
                             id: id_mat.clone(),
                         },
                     ));
@@ -839,15 +861,36 @@ fn clutter_parts(
     }
 }
 
-/// Meshes of a body, relative to its feet (y up, facing +z).
-fn body_parts(meshes: &mut Assets<Mesh>, kind: Kind) -> Vec<(Handle<Mesh>, Transform)> {
+/// Meshes of a body, relative to its feet (y up, facing +z). Each instance gets its own
+/// pose, drawn once at spawn: people with arms at their sides or out; animals standing or
+/// mid-stride, grazers sometimes with the head down. At 32-96 px the outline is what the
+/// detector sees, and a stiff four-post table didn't look like real animals to it.
+fn body_parts(
+    meshes: &mut Assets<Mesh>,
+    rng: &mut Rng,
+    kind: Kind,
+) -> Vec<(Handle<Mesh>, Transform, usize)> {
     if kind == Kind::Person {
-        // 1.75 m tall, shoulders 0.44 m wide, 0.26 m front to back
+        // 1.75 m tall, shoulders 0.44 m wide, 0.26 m front to back, and two arms
         let body = meshes.add(Capsule3d::new(0.22, 1.75 - 0.44));
-        return vec![(
+        let arm = meshes.add(Capsule3d::new(0.055, 0.55));
+        let mut parts = vec![(
             body,
             Transform::from_xyz(0.0, 0.875, 0.0).with_scale(Vec3::new(1.0, 1.0, 0.6)),
+            TORSO,
         )];
+        for side in [-1.0f32, 1.0] {
+            let out = rng.range(0.05, 0.6) as f32; // radians away from the body
+            let swing = rng.range(-0.4, 0.4) as f32; // forward or back
+            parts.push((
+                arm.clone(),
+                Transform::from_xyz(side * (0.25 + 0.15 * out), 1.12, 0.0).with_rotation(
+                    Quat::from_rotation_z(side * out) * Quat::from_rotation_x(swing),
+                ),
+                LIMB,
+            ));
+        }
+        return parts;
     }
     let q = quadruped(kind);
     let torso_y = q.leg + q.radius * 0.8;
@@ -857,29 +900,53 @@ fn body_parts(meshes: &mut Assets<Mesh>, kind: Kind) -> Vec<(Handle<Mesh>, Trans
             (q.length - 2.0 * q.radius).max(0.01),
         )),
         Transform::from_xyz(0.0, torso_y, 0.0).with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
+        TORSO,
     )];
-    let leg = meshes.add(Cylinder::new(q.radius * 0.3, q.leg + q.radius * 0.3));
-    for (sx, sz) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+    let leg_len = q.leg + q.radius * 0.3;
+    let leg = meshes.add(Cylinder::new(q.radius * 0.3, leg_len));
+    // stride: diagonal legs swing together, front and back in opposite directions
+    let stride = if rng.chance(0.6) {
+        rng.range(0.15, 0.45) as f32
+    } else {
+        0.0
+    };
+    for (sx, sz) in [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let swing = stride * sx * sz;
+        let hip = Vec3::new(
+            sx * q.radius * 0.6,
+            leg_len,
+            sz * (q.length / 2.0 - q.radius),
+        );
+        let dir = Vec3::new(0.0, -swing.cos(), swing.sin());
         parts.push((
             leg.clone(),
-            Transform::from_xyz(
-                sx * q.radius * 0.6,
-                (q.leg + q.radius * 0.3) / 2.0,
-                sz * (q.length / 2.0 - q.radius),
-            ),
+            Transform::from_translation(hip + dir * leg_len / 2.0)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Y, -dir)),
+            LIMB,
         ));
     }
+    let grazer = matches!(
+        kind,
+        Kind::Cattle | Kind::Horse | Kind::Deer | Kind::Sheep | Kind::Giraffe | Kind::Elephant
+    );
     let shoulder = Vec3::new(0.0, torso_y, q.length / 2.0 - q.radius);
-    let head = Vec3::new(0.0, torso_y + q.neck_rise, q.length / 2.0 + q.head * 0.5);
+    let head = if grazer && rng.chance(0.4) {
+        // head down to the grass, ahead of the shoulders
+        Vec3::new(0.0, q.head, q.length / 2.0 + q.head + q.leg * 0.3)
+    } else {
+        Vec3::new(0.0, torso_y + q.neck_rise, q.length / 2.0 + q.head * 0.5)
+    };
     let neck = head - shoulder;
     parts.push((
         meshes.add(Capsule3d::new(q.head * 0.6, neck.length())),
         Transform::from_translation((shoulder + head) / 2.0)
             .with_rotation(Quat::from_rotation_arc(Vec3::Y, neck.normalize())),
+        TORSO,
     ));
     parts.push((
         meshes.add(Sphere::new(q.head)),
         Transform::from_translation(head),
+        HEAD,
     ));
     parts
 }
@@ -929,7 +996,7 @@ impl SceneCtl<'_, '_> {
     }
 
     /// Move everything to `shot` and set every temperature.
-    pub fn apply(&mut self, shot: &Shot, world: &World) {
+    pub fn apply(&mut self, shot: &Shot) {
         let w = shot.window;
         let grey = |t: f64| {
             let v = w.linear(t);
@@ -953,10 +1020,12 @@ impl SceneCtl<'_, '_> {
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         }
         if let Some(mut img) = self.images.get_mut(&self.handles.texture) {
+            let c = &shot.conditions;
             img.data = Some(rgba(&ground_texture(
-                world.seed,
+                c.texture_seed,
                 TEX_SIZE,
-                shot.conditions.texture,
+                c.texture,
+                c.speckle,
             )));
         }
 
@@ -975,10 +1044,23 @@ impl SceneCtl<'_, '_> {
         if let Some(mut m) = self.mats.get_mut(&self.handles.roads) {
             m.base_color = grey(shot.road_c);
         }
-        for (set, temps) in self.handles.clutter.iter().zip(&shot.clutter_c) {
+        for ((set, temps), (kind, _)) in self
+            .handles
+            .clutter
+            .iter()
+            .zip(&shot.clutter_c)
+            .zip(CLUTTER)
+        {
+            // bushes share the ground texture, so they make up for its base too
+            let gain = if kind == ClutterKind::Bush {
+                texture_gain()
+            } else {
+                1.0
+            };
             for (h, &t) in set.iter().zip(temps) {
                 if let Some(mut m) = self.mats.get_mut(h) {
-                    m.base_color = grey(t);
+                    let v = w.linear(t) * gain;
+                    m.base_color = Color::linear_rgb(v, v, v);
                 }
             }
         }
@@ -998,8 +1080,10 @@ impl SceneCtl<'_, '_> {
                 Some(p) => {
                     *tf = p.transform;
                     *vis = Visibility::Inherited;
-                    if let Some(mut m) = self.mats.get_mut(&target.thermal) {
-                        m.base_color = grey(p.temp_c);
+                    for (h, &t) in target.thermal.iter().zip(&p.temp_c) {
+                        if let Some(mut m) = self.mats.get_mut(h) {
+                            m.base_color = grey(t);
+                        }
                     }
                 }
                 None => *vis = Visibility::Hidden,
@@ -1106,7 +1190,9 @@ mod tests {
             assert_eq!(s.ground_c.len(), world.vertices.len());
             empty += (s.n_targets() == 0) as usize;
             for p in s.targets.iter().flatten() {
-                assert!((s.window.lo..=s.window.hi).contains(&p.temp_c));
+                for t in p.temp_c {
+                    assert!((s.window.lo..=s.window.hi).contains(&t));
+                }
             }
         }
         assert!((4..=24).contains(&empty), "{empty} empty shots of 40");

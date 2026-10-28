@@ -85,7 +85,7 @@ fn main() {
             writer: Some(writer),
             params: String::from(
                 "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,motion_px,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg\n",
+                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg\n",
             ),
             blank: 0,
             index: 0,
@@ -158,7 +158,7 @@ fn drive(
         Phase::Place => {
             let kinds = ctl.kinds();
             let shot = Shot::random(&mut dg.rng, &world, &kinds);
-            ctl.apply(&shot, &world);
+            ctl.apply(&shot);
             dg.shot = Some(shot);
             dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Thermal);
         }
@@ -280,7 +280,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         .expect("write label");
     writeln!(
         dg.params,
-        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{}",
+        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{}",
         c.night,
         c.air_c,
         c.sun_c,
@@ -293,6 +293,8 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         boxes.len(),
         p.blur_sigma,
         p.motion_px,
+        p.interlace_px,
+        p.video_quality.map_or(0, |q| q),
         p.noise,
         p.out_noise,
         p.blotch,

@@ -233,6 +233,21 @@ and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as i
   - Later epochs overfit to sim (epoch 15: tiny 1.5%), so mixing with real data matters.
   - Watch in the mixed run: sim teaches "thermal four-legged blob = cattle", which may
     compete with `other_animal` on the BIRDSAI animal flights.
+- Realism round 2 (2026-10-28), aimed at what the sim-only model fired on in empty real
+  frames, and at the medium-size gap:
+  - **Wildlife**: elephant, giraffe and lion shapes as `other_animal` (the BIRDSAI
+    animal flights).
+  - **Poses**: every body instance gets its own pose at spawn (animals mid-stride, grazers
+    with heads down, people with arms).
+  - **Body temperatures**: torso, cooler limbs, warmer head.
+  - **Video artifacts**: interlacing (odd rows shifted 1-3 px, in 40% of frames), and
+    video-style compression (JPEG round trip at quality 40-80, then link noise, in half
+    the frames). Quality below 40 wiped out the noise real recordings keep.
+  - **Pixel-scale clutter**: sparse warm and cold specks 0.1-0.4 m across in the ground
+    texture. The texture now centres on byte 230, with a matching gain, so specks can
+    also be warmer than the ground.
+  - Same 8 worlds, regenerated as `sim_p2_w10..17`. v1 is reproducible from commit
+    1e18d03.
 - Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
   pixel, grass and leaves are sub-pixel, so they stay as texture.
 

@@ -24,6 +24,10 @@ pub struct Conditions {
     pub patch_c: f64,
     /// Fine ground texture (grass clumps, stones) as a fraction of the grey level.
     pub texture: f64,
+    /// Sparse warm and cold specks 0.1-0.4 m across (tufts, small shrubs, mounds), as a
+    /// fraction of the grey level, and the seed of this shot's texture pattern.
+    pub speckle: f64,
+    pub texture_seed: u64,
     /// Flood water: surface height (m) and temperature.
     pub water: Option<(f64, f64)>,
 }
@@ -56,6 +60,8 @@ impl Conditions {
             cooling_c: if night { rng.range(1.0, 6.0) } else { 0.0 },
             patch_c: rng.range(0.3, 3.0),
             texture: rng.range(0.02, 0.2),
+            speckle: rng.range(0.0, 0.25),
+            texture_seed: rng.next_u64(),
             water,
         }
     }
@@ -198,19 +204,51 @@ pub fn srgb_to_linear(v: f64) -> f64 {
     }
 }
 
-/// Fine ground texture as sRGB bytes (`size` x `size`, tiling): 255 is "no change", darker
-/// texels pull the ground's grey down by up to `amount`.
-pub fn ground_texture(seed: u64, size: usize, amount: f64) -> Vec<u8> {
+/// Texture byte that means "no change"; materials using the texture multiply their colour
+/// by `TEXTURE_GAIN` to make up for it. Below 255 so specks can be warmer than the ground.
+pub const TEXTURE_BASE: f64 = 230.0;
+
+/// Linear-colour factor that undoes `TEXTURE_BASE`.
+pub fn texture_gain() -> f32 {
+    (1.0 / srgb_to_linear(TEXTURE_BASE / 255.0)) as f32
+}
+
+/// Fine ground texture as sRGB bytes (`size` x `size`, tiling) around `TEXTURE_BASE`:
+/// smooth patches pull the ground's grey down by up to `amount`, and sparse specks a few
+/// texels across push it up or down by up to `speckle` (tufts, small shrubs, mounds: the
+/// pixel-scale clutter real frames are full of).
+pub fn ground_texture(seed: u64, size: usize, amount: f64, speckle: f64) -> Vec<u8> {
     let cells = 24.0; // features about 1/24 of the tile, a few pixels each in the picture
-    let mut out = Vec::with_capacity(size * size);
+    let mut val: Vec<f64> = Vec::with_capacity(size * size);
     for j in 0..size {
         for i in 0..size {
             let (u, v) = (i as f64 / size as f64, j as f64 / size as f64);
             let n = tiling_fbm(seed, u, v, cells);
-            out.push((255.0 * (1.0 - amount * (0.5 + 0.5 * n))).round() as u8);
+            val.push(TEXTURE_BASE * (1.0 - amount * (0.5 + 0.5 * n)));
         }
     }
-    out
+    let mut rng = Rng::new(seed ^ 0x5BEC);
+    for _ in 0..size * size / 1500 {
+        let (cx, cy) = (rng.range(0.0, size as f64), rng.range(0.0, size as f64));
+        let r = rng.range(1.5, 5.0);
+        let sign = if rng.chance(0.6) { 1.0 } else { -1.0 };
+        let amp = sign * speckle * rng.range(0.3, 1.0);
+        let reach = r.ceil() as i64 + 1;
+        for dy in -reach..=reach {
+            for dx in -reach..=reach {
+                let d2 = (dx * dx + dy * dy) as f64;
+                let w = (-d2 / (r * r)).exp();
+                let (x, y) = (
+                    (cx as i64 + dx).rem_euclid(size as i64) as usize,
+                    (cy as i64 + dy).rem_euclid(size as i64) as usize,
+                );
+                val[y * size + x] *= 1.0 + amp * w;
+            }
+        }
+    }
+    val.iter()
+        .map(|v| v.round().clamp(0.0, 255.0) as u8)
+        .collect()
 }
 
 /// Value-noise fbm over the unit square that wraps at its edges.
@@ -274,9 +312,12 @@ mod tests {
 
     #[test]
     fn texture_tiles_and_stays_in_range() {
-        let t = ground_texture(1, 64, 0.2);
+        let t = ground_texture(1, 64, 0.2, 0.0);
         assert_eq!(t.len(), 64 * 64);
-        assert!(t.iter().all(|&v| v >= 200));
+        assert!(t.iter().all(|&v| (180..=230).contains(&v)));
+        // specks go both ways, above the base too
+        let s = ground_texture(1, 256, 0.0, 0.2);
+        assert!(s.iter().any(|&v| v > 235) && s.iter().any(|&v| v < 225));
         // wraps: the noise at u = 0 and u = 1 is the same
         assert!((tiling_fbm(1, 0.0, 0.3, 8.0) - tiling_fbm(1, 1.0, 0.3, 8.0)).abs() < 1e-9);
     }
