@@ -264,6 +264,17 @@ and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as i
     objects regressed to about zero; 361, 60 and 61, all tiny, stay at zero. Suspect:
     the 1-8 px ground specks look like tiny bodies, so they teach "a tiny warm dot is
     background".
+- Round 3 (v3, 2026-10-28, `sim_p3_w10..17`): specks halved, 75% cold, warm ones wider
+  and fainter. Sim-only, best epoch 2 (last epoch 6 in brackets):
+  - tiny found 3.1% (0.6%), small 42.7% (26.5%), medium 8.8% (11.6%), large 17% (45%);
+  - alarms per empty frame 1.03 (0.05);
+  - flight 362 people AP50 0.774 (recall 82%); flights 58/352 animals 0.282/0.142;
+    361/60/61 still 0.
+
+  The speck trade-off is real: warm specks as negatives cut alarms but suppress tiny
+  real objects. Other v2/v3 differences are within the noise of these short runs
+  (mAP swings 2-4x between epochs). In a mixed run, real empty frames supply real warm
+  specks as negatives, so v3 goes into the mixed run.
 - Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
   pixel, grass and leaves are sub-pixel, so they stay as texture.
 
