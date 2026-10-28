@@ -85,7 +85,7 @@ fn main() {
             writer: Some(writer),
             params: String::from(
                 "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,noise,out_noise,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg\n",
+                 targets,boxes,blur,motion_px,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg\n",
             ),
             blank: 0,
             index: 0,
@@ -280,7 +280,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         .expect("write label");
     writeln!(
         dg.params,
-        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{}",
+        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{}",
         c.night,
         c.air_c,
         c.sun_c,
@@ -292,8 +292,11 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         shot.n_targets(),
         boxes.len(),
         p.blur_sigma,
+        p.motion_px,
         p.noise,
         p.out_noise,
+        p.blotch,
+        p.blotch_px,
         p.fpn_col,
         p.agc_lo_pct,
         p.agc_hi_pct,

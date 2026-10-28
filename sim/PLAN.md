@@ -157,7 +157,73 @@ Progress (2026-10-28). Built:
 | brightness p1-p99 | 46-215 | 72-191 | 52-195 |
 | empty frames | 44% | 27% | 41% |
 
-Pilot pool: `data/interim/sim_p1_w10` ... `sim_p1_w17` (8 worlds x 500 frames).
+Those medians hid a gap. A crop gallery at matched sizes (8-20 px) against the val
+flights the go/no-go is judged on showed that real BIRDSAI is much harder than the sim
+was: flight 361 has noise 5 and contrast 50 grey levels (3.7x the ring spread), and its
+people are faint, soft blobs; flights 58/60/61 show motion smear. Sim people were crisp,
+bright and clean. So the sensor model now spans clean (HIT-UAV) to hard (BIRDSAI):
+- blur 0.5-2 px, log-uniform;
+- motion smear 1-4 px in half the frames;
+- output noise 0.8-8 levels plus blotchy correlated noise;
+- JPEG kept at 65-96 (lower quality smoothed the noise away);
+- squeezed brightness ranges;
+- body contrast log-uniform, so faint bodies are common.
+
+Per-image noise now overlaps BIRDSAI's: 0-2 levels in 72% of sim images vs 63%, 4-5 in
+12% vs 25%. Caveat: tuned on image statistics (never detection results) of val flights.
+The test set stays the independent check.
+
+| 8 pilot worlds | sim | BIRDSAI | HIT-UAV |
+|---|---|---|---|
+| person size, median | 15 px | 22 px | 15 px |
+| person minus surroundings | 68 (5.6x) | 130 (5.6x); 361: 50 (3.7x) | 109 (5.4x) |
+| animals, x ring spread | 3.6-5.2 | 3.6; 58/60/61: 4.5-8.0 | - |
+| brightness p1-p99 | 42-186 | 72-191 | 52-195 |
+| empty frames | 32% | 27% | 41% |
+
+Pilot pool: `data/interim/sim_p1_w10` ... `sim_p1_w17` (8 worlds x 500 frames, 4,000
+images). Built with the real data on D: (`split_dataset.py --out`); the real images and
+their splits are identical to `data/processed`, and all sim images are in train.
+
+Before the full run, two cheap checks:
+1. **Zero-shot**: the real-trained model on the sim images, per size, against its real
+   val recall.
+2. **Sim-only**: a short training on sim alone, scored on real thermal val.
+
+Zero-shot result (2026-10-28, `hituav` best.pt, class-agnostic, IoU >= 0.5, conf
+0.25). The first two columns come from a quick version with size by longer side, on 800
+and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as in
+`evaluate.py`, 800 images each) on the final 8-world pilot set:
+
+| found | sim, smooth clutter | sim, lumpy (1 world) | sim pilot (8 worlds) | real thermal val |
+|---|---|---|---|---|
+| tiny | 16% | 15% | 16% | 7% |
+| small | 30% | 24% | 35% | 28% |
+| medium | 28% | 19% | 20% | 87% |
+| alarms per empty frame | 0.87 | 0.43 | 0.58 | 0.12 |
+
+    uv run python scripts/zero_shot.py <best.pt> D:/aar/sim_p1_only --split train --sample 800 --alarms runs/eval/zero_shot_alarms
+    uv run python scripts/zero_shot.py <best.pt> data/processed --split val --modality thermal --sample 800
+
+- Small sim bodies aren't foreign to the model: it finds them more easily than real
+  ones.
+- Medium sim bodies (cattle, horses at 32-96 px) are rarely found: thermal livestock
+  shapes it has never seen. That is new knowledge rather than a defect, but if the pilot
+  is a go, better body meshes are the first thing to try there.
+- Alarms on empty frames went to smooth uniform discs (bushes, rocks) and plain
+  rectangles. Training on those as negatives would teach "a smooth warm blob is
+  background", which is what real animals look like at this size.
+- So clutter was made unlike bodies:
+  - bushes and trees are clumps of noise-displaced, finely subdivided blobs with
+    mottled temperatures;
+  - rocks are lumpy and cooler;
+  - cars have cold glass on a warm body;
+  - roofs come in two halves.
+
+  Alarms halved. What's left is mostly cars (fair hard negatives: real cars are
+  unlabelled in HIT-UAV) and a few body-sized bushes.
+- Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
+  pixel, grass and leaves are sub-pixel, so they stay as texture.
 
 Scope: thermal only, 640x512, white-hot; oblique and nadir views from 60-130 m; bush,
 grass and flooded terrain; day and night; people plus 3-4 animal shapes (deer, cattle,
@@ -183,6 +249,13 @@ dog, boar).
 
 ### Phase 2: wider coverage (after a go)
 
+- **Better body meshes**, first. The real model finds only ~20% of medium (32-96 px)
+  sim cattle and horses, against 87% of real medium objects (zero-shot, phase 1).
+  - What to try: legs apart and walking poses, heads down grazing, people with arms and
+    a warm head; then CC0 animal and human models if primitives aren't enough
+    (Quaternius, Kenney; verify each license and record it per image).
+  - How to judge: medium-size found rate in `scripts/zero_shot.py`, and the body-size
+    gap behind `LABEL_MARGIN` (lower the margin by what closes).
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the

@@ -73,6 +73,26 @@ pub fn fbm(seed: u64, x: f64, y: f64, octaves: u32) -> f64 {
     sum / norm
 }
 
+/// 3D fractal value noise in about [-1, 1] (for shapes: lumpy canopies and rocks).
+pub fn fbm3(seed: u64, x: f64, y: f64, z: f64, octaves: u32) -> f64 {
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
+    for o in 0..octaves {
+        let s = seed.wrapping_add(o as u64);
+        sum += amp * (2.0 * value_noise3(s, x * freq, y * freq, z * freq) - 1.0);
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    sum / norm
+}
+
+fn value_noise3(seed: u64, x: f64, y: f64, z: f64) -> f64 {
+    let z0 = z.floor();
+    let layer = |k: i64| value_noise(seed ^ (k as u64).wrapping_mul(0xD6E8_FEB8_6659_FD93), x, y);
+    let (a, b) = (layer(z0 as i64), layer(z0 as i64 + 1));
+    a + (b - a) * smooth(z - z0)
+}
+
 fn value_noise(seed: u64, x: f64, y: f64) -> f64 {
     let (x0, y0) = (x.floor(), y.floor());
     let (fx, fy) = (smooth(x - x0), smooth(y - y0));
@@ -103,6 +123,14 @@ mod tests {
         let p = v[w * 50 + 70];
         assert!((a.height(p[0], p[2]) - p[1]).abs() < 1e-9);
         assert!(v.iter().all(|p| p[1].abs() <= 15.0));
+    }
+
+    #[test]
+    fn fbm3_is_smooth_and_bounded() {
+        let a = fbm3(1, 0.3, 0.4, 0.5, 4);
+        let b = fbm3(1, 0.3, 0.4, 0.5001, 4);
+        assert!((a - b).abs() < 1e-2);
+        assert!((0..200).all(|k| fbm3(2, k as f64 * 0.37, 1.1, k as f64 * 0.11, 4).abs() <= 1.0));
     }
 
     #[test]

@@ -88,7 +88,7 @@ impl Conditions {
     /// they are there so the model learns that a warm blob isn't always a body.
     pub fn clutter_c(&self, rng: &mut Rng) -> f64 {
         if self.night {
-            self.air_c + rng.range(-2.0, 4.0)
+            self.air_c + rng.range(-3.0, 3.0)
         } else {
             self.air_c + self.sun_c * rng.range(0.3, 1.4)
         }
@@ -116,6 +116,15 @@ impl Conditions {
         }
     }
 
+    /// Car glass reflects the cold sky: cooler than the body, day and night.
+    pub fn glass_c(&self, rng: &mut Rng) -> f64 {
+        if self.night {
+            self.air_c - rng.range(2.0, 8.0)
+        } else {
+            self.air_c + rng.range(-3.0, 3.0)
+        }
+    }
+
     /// Roads and tracks hold heat: warmer than soil at night, hotter in the sun.
     pub fn road_c(&self, rng: &mut Rng) -> f64 {
         if self.night {
@@ -129,12 +138,15 @@ impl Conditions {
     /// stand out from what's around them, less in the heat of the day, and clothing or wet
     /// fur sometimes makes them darker than sun-baked ground.
     pub fn body_c(&self, rng: &mut Rng, ground_c: f64, person: bool) -> f64 {
-        let delta = match (self.night, person) {
-            (true, true) => rng.range(5.0, 15.0),
-            (true, false) => rng.range(3.0, 12.0),
-            (false, true) => rng.range(2.0, 10.0),
-            (false, false) => rng.range(1.5, 8.0),
+        // log-uniform: faint bodies (BIRDSAI flight 361: 50 grey levels, 3.7x the ground's
+        // spread) are as common as bright ones
+        let (lo, hi) = match (self.night, person) {
+            (true, true) => (2.0_f64, 15.0_f64),
+            (true, false) => (1.5, 12.0),
+            (false, true) => (1.5, 10.0),
+            (false, false) => (1.0, 8.0),
         };
+        let delta = rng.range(lo.ln(), hi.ln()).exp();
         let darker = !self.night && rng.chance(0.1);
         ground_c + if darker { -delta } else { delta }
     }
@@ -256,7 +268,7 @@ mod tests {
             ..Conditions::random(&mut rng, None)
         };
         for _ in 0..100 {
-            assert!(c.body_c(&mut rng, 5.0, true) >= 10.0);
+            assert!(c.body_c(&mut rng, 5.0, true) >= 7.0);
         }
     }
 

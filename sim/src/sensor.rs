@@ -3,8 +3,13 @@
 //!
 //! Order follows the camera: optics blur, then noise and fixed-pattern stripes in raw
 //! counts, then auto-gain (a percentile stretch, the main reason the same scene looks
-//! different from frame to frame), then output noise and 8-bit output. Compression happens when the image
-//! is saved (JPEG quality is part of the parameters).
+//! different from frame to frame), then output noise and 8-bit output. Compression happens
+//! when the image is saved (JPEG quality is part of the parameters).
+//!
+//! The ranges span clean frames (HIT-UAV: noise ~1 grey level, crisp edges) to the hard
+//! BIRDSAI flights (noise 5-6 levels, in blotches a few pixels across, that survive the
+//! compression; soft faint bodies; a squeezed brightness range), drawn log-uniform so
+//! both ends are common.
 
 use crate::rng::Rng;
 
@@ -12,12 +17,20 @@ use crate::rng::Rng;
 pub struct SensorParams {
     /// Gaussian optics blur, pixels.
     pub blur_sigma: f32,
+    /// Motion smear while the aircraft moves (BIRDSAI is filmed from a fixed-wing plane):
+    /// length in pixels (0 = none) and direction in radians.
+    pub motion_px: f32,
+    pub motion_dir: f32,
     /// Temporal noise in raw grey levels (0-255 scale, before auto-gain).
     pub noise: f32,
-    /// Noise in output grey levels, after auto-gain. Real footage shows 1-2 levels of
+    /// Noise in output grey levels, after auto-gain. Real footage shows 1-6 levels of
     /// pixel-to-pixel noise whatever the scene, so most of the noise is set here; raw
     /// noise alone would vanish whenever a hot roof widens the gain range.
     pub out_noise: f32,
+    /// Blotchy noise in output grey levels: white noise blurred over `blotch_px`, like the
+    /// mottled texture of compressed thermal video.
+    pub blotch: f32,
+    pub blotch_px: f32,
     /// Spread of per-column and per-row offsets (fixed-pattern noise).
     pub fpn_col: f32,
     pub fpn_row: f32,
@@ -31,26 +44,43 @@ pub struct SensorParams {
 
 impl SensorParams {
     pub fn random(rng: &mut Rng) -> Self {
+        let out_lo = rng.range(10.0, 80.0) as f32;
         Self {
-            blur_sigma: rng.range(0.5, 1.3) as f32,
+            blur_sigma: log_range(rng, 0.5, 2.0),
+            motion_px: if rng.chance(0.5) {
+                rng.range(1.0, 4.0) as f32
+            } else {
+                0.0
+            },
+            motion_dir: rng.range(0.0, std::f64::consts::PI) as f32,
             noise: rng.range(0.2, 0.8) as f32,
-            out_noise: rng.range(0.8, 2.5) as f32,
+            out_noise: log_range(rng, 0.8, 8.0),
+            blotch: log_range(rng, 0.3, 6.0),
+            blotch_px: rng.range(1.0, 3.0) as f32,
             fpn_col: rng.range(0.0, 0.6) as f32,
             fpn_row: rng.range(0.0, 0.8) as f32,
             agc_lo_pct: rng.range(0.1, 2.0) as f32,
             agc_hi_pct: rng.range(98.0, 99.95) as f32,
-            out_lo: rng.range(10.0, 80.0) as f32,
-            out_hi: rng.range(180.0, 250.0) as f32,
-            jpeg_quality: rng.range(70.0, 96.0) as u8,
+            out_lo,
+            // a squeezed range sometimes (BIRDSAI flight 361: p1-p99 37-147)
+            out_hi: (out_lo + rng.range(80.0, 200.0) as f32).min(250.0),
+            // low JPEG quality smooths noise away; real hard flights keep theirs
+            jpeg_quality: rng.range(65.0, 96.0) as u8,
         }
     }
+}
+
+/// Log-uniform in [lo, hi).
+fn log_range(rng: &mut Rng, lo: f64, hi: f64) -> f32 {
+    rng.range(lo.ln(), hi.ln()).exp() as f32
 }
 
 /// Apply the camera to a `width` x `height` grey render.
 pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mut Rng) -> Vec<u8> {
     assert_eq!(raw.len(), width * height);
     let img: Vec<f32> = raw.iter().map(|&v| v as f32).collect();
-    let mut img = blur(&img, width, height, p.blur_sigma);
+    let img = blur(&img, width, height, p.blur_sigma);
+    let mut img = smear(&img, width, height, p.motion_px, p.motion_dir);
     let cols: Vec<f32> = (0..width)
         .map(|_| p.fpn_col * rng.normal() as f32)
         .collect();
@@ -65,12 +95,53 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
         percentile(&img, p.agc_hi_pct),
     );
     let gain = (p.out_hi - p.out_lo) / (hi - lo).max(1.0);
+    let blotches = unit_blotches(width, height, p.blotch_px, rng);
     img.iter()
-        .map(|&v| {
-            let out = p.out_lo + (v - lo) * gain + p.out_noise * rng.normal() as f32;
+        .zip(&blotches)
+        .map(|(&v, &b)| {
+            let out = p.out_lo + (v - lo) * gain + p.out_noise * rng.normal() as f32 + p.blotch * b;
             out.round().clamp(0.0, 255.0) as u8
         })
         .collect()
+}
+
+/// Average along a line of `length` pixels in direction `dir` (motion blur), sampled every
+/// half pixel with clamped edges.
+pub fn smear(img: &[f32], width: usize, height: usize, length: f32, dir: f32) -> Vec<f32> {
+    if length < 0.5 {
+        return img.to_vec();
+    }
+    let n = (2.0 * length).ceil() as usize + 1;
+    let offsets: Vec<(isize, isize)> = (0..n)
+        .map(|k| {
+            let t = (k as f32 / (n - 1) as f32 - 0.5) * length;
+            (
+                (t * dir.cos()).round() as isize,
+                (t * dir.sin()).round() as isize,
+            )
+        })
+        .collect();
+    let mut out = vec![0.0; img.len()];
+    for y in 0..height as isize {
+        for x in 0..width as isize {
+            let mut acc = 0.0;
+            for &(dx, dy) in &offsets {
+                let sx = (x + dx).clamp(0, width as isize - 1) as usize;
+                let sy = (y + dy).clamp(0, height as isize - 1) as usize;
+                acc += img[sy * width + sx];
+            }
+            out[y as usize * width + x as usize] = acc / n as f32;
+        }
+    }
+    out
+}
+
+/// White noise blurred over `sigma` pixels, rescaled to unit spread.
+fn unit_blotches(width: usize, height: usize, sigma: f32, rng: &mut Rng) -> Vec<f32> {
+    let white: Vec<f32> = (0..width * height).map(|_| rng.normal() as f32).collect();
+    let b = blur(&white, width, height, sigma);
+    let std = (b.iter().map(|v| v * v).sum::<f32>() / b.len() as f32).sqrt();
+    b.iter().map(|v| v / std.max(1e-6)).collect()
 }
 
 /// Separable Gaussian blur with clamped edges.
@@ -132,8 +203,12 @@ mod tests {
         let raw: Vec<u8> = (0..100 * 100).map(|k| (100 + k % 20) as u8).collect();
         let p = SensorParams {
             blur_sigma: 0.0,
+            motion_px: 0.0,
+            motion_dir: 0.0,
             noise: 0.0,
             out_noise: 0.0,
+            blotch: 0.0,
+            blotch_px: 1.0,
             fpn_col: 0.0,
             fpn_row: 0.0,
             agc_lo_pct: 0.0,
@@ -145,6 +220,16 @@ mod tests {
         let out = apply(&raw, 100, 100, &p, &mut Rng::new(0));
         assert_eq!(*out.iter().min().unwrap(), 20);
         assert_eq!(*out.iter().max().unwrap(), 220);
+    }
+
+    #[test]
+    fn smear_spreads_along_its_direction_only() {
+        let mut img = vec![0.0; 81];
+        img[40] = 9.0; // centre of 9x9
+        let s = smear(&img, 9, 9, 4.0, 0.0); // horizontal
+        assert!(s[39] > 0.0 && s[41] > 0.0);
+        assert_eq!(s[31], 0.0); // nothing above
+        assert!((s.iter().sum::<f32>() - 9.0).abs() < 1e-4);
     }
 
     #[test]

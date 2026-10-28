@@ -40,7 +40,7 @@ const RELIEF_M: f64 = 12.0;
 /// Ground texture: one tile every TILE_M metres, TEX_SIZE texels across.
 const TILE_M: f32 = 24.0;
 const TEX_SIZE: usize = 512;
-const CLUTTER_MATS: usize = 4;
+const CLUTTER_MATS: usize = 8;
 
 /// Unlabelled things in the scene: they hide targets and look like them (warm blobs,
 /// crisp edges), so the model learns what isn't a body.
@@ -223,7 +223,7 @@ pub struct SceneHandles {
     texture: Handle<Image>,
     water: Handle<StandardMaterial>,
     roads: Handle<StandardMaterial>,
-    /// Per `ClutterKind`, CLUTTER_MATS materials shared round-robin by its instances.
+    /// Per `ClutterKind`, CLUTTER_MATS materials shared by the parts of its instances.
     clutter: Vec<Vec<Handle<StandardMaterial>>>,
 }
 
@@ -327,7 +327,7 @@ impl Shot {
             // houses and cars come in some scenes only (a farm, a village, a road)
             let n = match kind {
                 ClutterKind::Bush => rng.index(max + 1),
-                ClutterKind::Rock => rng.index(max + 1),
+                ClutterKind::Rock => rng.chance(0.4) as usize * (1 + rng.index(max)),
                 ClutterKind::House => rng.chance(0.35) as usize * (1 + rng.index(max)),
                 ClutterKind::Car => rng.chance(0.4) as usize * (1 + rng.index(max)),
             };
@@ -397,11 +397,12 @@ impl Shot {
                 })
                 .collect();
             let temps: Vec<f64> = (0..CLUTTER_MATS)
-                .map(|_| match kind {
+                .map(|i| match kind {
                     ClutterKind::Bush => conditions.vegetation_c(rng),
                     ClutterKind::Rock => conditions.clutter_c(rng),
                     ClutterKind::House => conditions.building_c(rng),
-                    ClutterKind::Car => conditions.vehicle_c(rng),
+                    ClutterKind::Car if i < CLUTTER_MATS / 2 => conditions.vehicle_c(rng),
+                    ClutterKind::Car => conditions.glass_c(rng),
                 })
                 .collect();
             clutter.push(placed);
@@ -618,8 +619,14 @@ pub fn spawn_scene(
         },
     ));
 
-    let blob = meshes.add(Sphere::new(1.0).mesh().ico(2).unwrap());
     let block = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let mut shapes = Rng::new(world.seed ^ 0x5_4A9E);
+    let canopies: Vec<_> = (0..8)
+        .map(|_| meshes.add(lumpy_blob(&mut shapes, 0.35, 0.3)))
+        .collect();
+    let stones: Vec<_> = (0..4)
+        .map(|_| meshes.add(lumpy_blob(&mut shapes, 0.15, 0.15)))
+        .collect();
     let mut clutter = Vec::new();
     for (kind, n) in CLUTTER {
         let set: Vec<_> = (0..CLUTTER_MATS)
@@ -634,23 +641,24 @@ pub fn spawn_scene(
                 })
             })
             .collect();
-        let mesh = match kind {
-            ClutterKind::Bush | ClutterKind::Rock => &blob,
-            ClutterKind::House | ClutterKind::Car => &block,
-        };
-        for i in 0..n {
-            let m = set[i % CLUTTER_MATS].clone();
-            commands.spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(m.clone()),
-                Transform::default(),
-                Visibility::Hidden,
-                Clutter { kind },
-                Look {
-                    thermal: m,
-                    id: background.clone(),
-                },
-            ));
+        for _ in 0..n {
+            let parts = clutter_parts(&mut shapes, kind, &canopies, &stones, &block);
+            commands
+                .spawn((Transform::default(), Visibility::Hidden, Clutter { kind }))
+                .with_children(|c| {
+                    for (mesh, tf, mat) in parts {
+                        let m = set[mat].clone();
+                        c.spawn((
+                            Mesh3d(mesh),
+                            MeshMaterial3d(m.clone()),
+                            tf,
+                            Look {
+                                thermal: m,
+                                id: background.clone(),
+                            },
+                        ));
+                    }
+                });
         }
         clutter.push(set);
     }
@@ -727,6 +735,108 @@ fn road_mesh(world: &World) -> Mesh {
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; n])
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32, 0.0]; n])
     .with_inserted_indices(Indices::U32(idx))
+}
+
+/// A unit sphere with its surface pushed in and out by 3D noise (`rough` = fraction of
+/// the radius), so its outline is ragged at every scale, and vertex colours that vary its
+/// temperature inside by up to `mottle` (a canopy has gaps, sunlit and shaded sides).
+/// Finely subdivided (2,562 vertices) so the outline stays ragged up close.
+fn lumpy_blob(rng: &mut Rng, rough: f64, mottle: f64) -> Mesh {
+    use bevy::mesh::VertexAttributeValues;
+    let mut mesh = Sphere::new(1.0).mesh().ico(4).expect("ico sphere");
+    let (seed, freq) = (rng.next_u64(), rng.range(1.5, 3.0));
+    let mut colors = Vec::new();
+    if let Some(VertexAttributeValues::Float32x3(pos)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    {
+        for p in pos.iter_mut() {
+            let (x, y, z) = (p[0] as f64, p[1] as f64, p[2] as f64);
+            let r = 1.0 + rough * crate::world::fbm3(seed, x * freq, y * freq, z * freq, 4);
+            *p = [(x * r) as f32, (y * r) as f32, (z * r) as f32];
+            let shade = crate::world::fbm3(seed ^ 1, x * 5.0, y * 5.0, z * 5.0, 3);
+            let m = (1.0 - mottle * (0.5 + 0.5 * shade)) as f32;
+            colors.push([m, m, m, 1.0]);
+        }
+    }
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    mesh.compute_smooth_normals();
+    mesh
+}
+
+/// Parts of one clutter instance in unit space (the shot scales the whole thing), each
+/// with an index into its kind's materials: the first half are the kind's main
+/// temperatures, the second half its secondary ones (car glass, the other roof half).
+/// A real model took smooth uniform discs and plain rectangles for animals (zero-shot
+/// test, 2026-10-28), so clutter is made irregular and two-tone, unlike bodies.
+fn clutter_parts(
+    rng: &mut Rng,
+    kind: ClutterKind,
+    canopies: &[Handle<Mesh>],
+    stones: &[Handle<Mesh>],
+    block: &Handle<Mesh>,
+) -> Vec<(Handle<Mesh>, Transform, usize)> {
+    let half = CLUTTER_MATS / 2;
+    match kind {
+        ClutterKind::Bush => {
+            // a clump of 1-4 lumpy blobs, each its own temperature: an irregular canopy
+            (0..1 + rng.index(4))
+                .map(|_| {
+                    let blob = &canopies[rng.index(canopies.len())];
+                    let r = rng.range(0.45, 0.8) as f32;
+                    let tf = Transform::from_xyz(
+                        rng.range(-0.55, 0.55) as f32,
+                        rng.range(-0.2, 0.3) as f32,
+                        rng.range(-0.55, 0.55) as f32,
+                    )
+                    .with_scale(Vec3::new(
+                        r,
+                        r * rng.range(0.7, 1.1) as f32,
+                        r,
+                    ));
+                    (blob.clone(), tf, rng.index(CLUTTER_MATS))
+                })
+                .collect()
+        }
+        ClutterKind::Rock => vec![(
+            stones[rng.index(stones.len())].clone(),
+            Transform::default(),
+            rng.index(half),
+        )],
+        ClutterKind::House => {
+            // walls, and a roof in two halves along the ridge (sun side and shade side)
+            let main = rng.index(half);
+            vec![
+                (
+                    block.clone(),
+                    Transform::from_scale(Vec3::new(0.98, 1.0, 0.98)),
+                    main,
+                ),
+                (
+                    block.clone(),
+                    Transform::from_xyz(-0.25, 0.5, 0.0).with_scale(Vec3::new(0.5, 0.06, 1.0)),
+                    main,
+                ),
+                (
+                    block.clone(),
+                    Transform::from_xyz(0.25, 0.5, 0.0).with_scale(Vec3::new(0.5, 0.06, 1.0)),
+                    half + rng.index(half),
+                ),
+            ]
+        }
+        ClutterKind::Car => vec![
+            (
+                block.clone(),
+                Transform::from_xyz(0.0, -0.2, 0.0).with_scale(Vec3::new(1.0, 0.55, 1.0)),
+                rng.index(half),
+            ),
+            // cabin and glass: reflects the cold sky
+            (
+                block.clone(),
+                Transform::from_xyz(0.0, 0.28, -0.05).with_scale(Vec3::new(0.85, 0.45, 0.5)),
+                half + rng.index(half),
+            ),
+        ],
+    }
 }
 
 /// Meshes of a body, relative to its feet (y up, facing +z).
