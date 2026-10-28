@@ -1,5 +1,6 @@
 """Evaluate trained weights: mAP overall, per class, per modality, synthetic vs real, per size,
-plus precision, recall and false alarms on empty images at fixed detection thresholds.
+plus precision, recall and false alarms on empty images at fixed detection thresholds,
+and the same per flight (sequence), so one flight can't silently decide a class's score.
 
     uv run python scripts/evaluate.py runs/train/baseline/weights/best.pt --split test
 

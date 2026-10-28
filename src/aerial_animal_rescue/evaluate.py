@@ -96,7 +96,44 @@ def run_evaluation(
         g: [operating_point(subset(mask), n, c) for c in operating_confs]
         for g, mask in groups.items()
     }
+    report["by_sequence"] = by_sequence(results, meta, class_names, operating_confs[0])
     return report
+
+
+def by_sequence(
+    results: list[ImageResult], meta: pd.DataFrame, class_names: list[str], conf: float
+) -> dict:
+    """mAP, recall and false alarms per flight (source/sequence_id), largest first.
+
+    A split holds only a handful of flights per source, so one flight can carry most of a
+    class's boxes (e.g. one video holding half of val's people). `share` says how much of
+    the class in this split the flight accounts for.
+    """
+    n = len(class_names)
+    totals = evaluate(results, n)["per_class"]
+    keys = meta["source"].astype(str) + "/" + meta["sequence_id"].astype(str)
+    out = {}
+    for key in keys.unique():
+        rs = [r for r, k in zip(results, keys, strict=True) if k == key]
+        res, op = evaluate(rs, n), operating_point(rs, n, conf)
+        out[key] = {
+            "images": len(rs),
+            **_summary(res),
+            "conf": conf,
+            "recall": op["recall"],
+            "false_alarms_per_empty_image": op["false_alarms_per_empty_image"],
+            "empty_images": op["empty_images"],
+            "per_class": {
+                class_names[c]: {
+                    "ap50": v["ap50"],
+                    "n_gt": v["n_gt"],
+                    "share": v["n_gt"] / totals[c]["n_gt"],
+                }
+                for c, v in res["per_class"].items()
+                if v["n_gt"] > 0
+            },
+        }
+    return dict(sorted(out.items(), key=lambda kv: (-kv[1]["n_gt"], kv[0])))
 
 
 def _summary(res: dict) -> dict:
@@ -129,6 +166,24 @@ def format_report(report: dict) -> str:
             f"(of {op['empty_images']})"
             for op in ops
         ]
+    seqs = report.get("by_sequence", {})
+    if seqs:
+        conf = next(iter(seqs.values()))["conf"]
+        lines.append(f"by_sequence (recall and alarms at conf>={conf}; % = share of the class):")
+    for key, v in seqs.items():
+        classes = ", ".join(
+            f"{c} AP50={pc['ap50']:.3f} ({pc['n_gt']}, {pc['share']:.0%})"
+            for c, pc in v["per_class"].items()
+        )
+        alarms = (
+            f"alarms/empty image={v['false_alarms_per_empty_image']:.2f} (of {v['empty_images']})"
+            if v["empty_images"]
+            else "no empty images"
+        )
+        lines.append(
+            f"  {key:<34} images={v['images']:<5} boxes={v['n_gt']:<5} "
+            f"recall={v['recall']:.3f}  {alarms}  {classes}"
+        )
     return "\n".join(lines)
 
 
