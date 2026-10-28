@@ -222,6 +222,17 @@ and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as i
 
   Alarms halved. What's left is mostly cars (fair hard negatives: real cars are
   unlabelled in HIT-UAV) and a few body-sized bushes.
+- Sim-only check (2026-10-28): yolo11s trained 15 epochs on the 4,000 pilot images
+  alone (`runs/sim_only_p1.yaml`), scored on real val.
+  - Its best epoch (3) finds tiny and small real thermal objects about as often as the
+    real-trained model: tiny 8.3% vs 6.7%, small 24.6% vs 27.6% (class-agnostic).
+  - On flight 362 people it scores AP50 0.658, vs 0.623 for `hituav`, with no real image
+    in training. Flight 361 stays at about zero (0.011).
+  - Medium objects don't transfer (3.8% vs 87%): the big real wildlife looks nothing
+    like the sim herds. Alarms on empty real frames run at 0.68 vs 0.12.
+  - Later epochs overfit to sim (epoch 15: tiny 1.5%), so mixing with real data matters.
+  - Watch in the mixed run: sim teaches "thermal four-legged blob = cattle", which may
+    compete with `other_animal` on the BIRDSAI animal flights.
 - Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
   pixel, grass and leaves are sub-pixel, so they stay as texture.
 
