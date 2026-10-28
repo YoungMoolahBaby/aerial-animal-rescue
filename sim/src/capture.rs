@@ -109,6 +109,15 @@ pub fn boxes_from_id_mask(
         .collect()
 }
 
+/// Object-id mask from an id render (RGB bytes, row-major): object `k` is drawn with red
+/// `k * step` and everything else with red 0, so `step` leaves room for small colour
+/// errors in the render. Returns ids, `0` for background.
+pub fn id_mask_from_rgb(rgb: &[u8], step: u8) -> Vec<u32> {
+    rgb.chunks_exact(3)
+        .map(|px| ((px[0] as f32) / step as f32).round() as u32)
+        .collect()
+}
+
 /// Metadata for one image; the rest of the row is filled by `PoolWriter`.
 #[derive(Clone, Debug, Default)]
 pub struct Record {
@@ -260,6 +269,12 @@ mod tests {
         ];
         let boxes = boxes_from_id_mask(&mask, 4, 2);
         assert_eq!(boxes, vec![(1, [1, 0, 3, 2], 3)]); // id 2 has 1 pixel: dropped
+    }
+
+    #[test]
+    fn id_mask_decodes_red_steps_and_ignores_background() {
+        let rgb = [0, 200, 0, 10, 0, 0, 31, 0, 0, 4, 90, 0];
+        assert_eq!(id_mask_from_rgb(&rgb, 10), vec![0, 1, 3, 0]);
     }
 
     #[test]

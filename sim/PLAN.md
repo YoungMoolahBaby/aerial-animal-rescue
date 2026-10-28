@@ -12,13 +12,17 @@ two jobs:
 
 Both use one world: the same terrain, weather, animals and sensors.
 
-Status (2026-10-28): phase 0 done; phase 1 next.
+Status (2026-10-28): phase 0 done; phase 1 renderer done, 4,000-image pilot pool built,
+training experiment next.
 
 Build and run (from `sim/`; the first release build of Bevy + CortenForge takes ~18 min):
 
-    cargo run --release --bin sim_view                 # Space: new random shot
-    cargo run --release --bin datagen -- --out ../runs/sim/phase0 --frames 50 --seed 0
+    cargo run --release --bin sim_view                 # Space: new shot, I: id look
+    cargo run --release --bin datagen -- --out ../runs/sim/test --frames 50 --seed 0
     cargo test --release
+
+`SIM_DEBUG=1` makes datagen also save each shot's raw render and id frame under
+`<pool>/../debug/` (to check labels against pixels).
 
 Pools for training go to `data/interim/sim_<name>/` (picked up by `split_dataset.py`);
 test pools go under `runs/sim/` so they never end up in a real build.
@@ -114,6 +118,47 @@ Planned:
 
 ### Phase 1: thermal pilot (the go/no-go)
 
+Progress (2026-10-28). Built:
+
+- **Temperature render**: every material is an unlit grey = temperature through a
+  per-shot window (`thermal.rs`), so the 8-bit frame keeps its precision. Ground by time
+  of day (sun-facing slopes, vegetation cover, soil patches, a fine tiling texture),
+  bodies a few degrees off the ground under them (occasionally darker by day), plus
+  unlabelled clutter: textured bushes and trees, rocks, houses (cold roofs at night),
+  cars, roads and flood water.
+- **Sensor model** (`sensor.rs`): optics blur, raw noise, column/row stripes, percentile
+  auto-gain, output noise, JPEG 70-95.
+- **Labels from an id render**: each shot is drawn a second time with target k in red
+  10k; boxes are the visible pixels (>= 6), so bodies behind hills, trees, roofs or
+  under water get no box and partly hidden ones get a box on what shows. Checked
+  pixel-exact against the raw render (`SIM_DEBUG`).
+- **Bodies from primitives**: people standing, sitting or lying; cattle, horse, deer,
+  sheep, dog, boar as capsule-and-cylinder quadrupeds, standing or lying. No third-party
+  assets, so no asset licenses (CC0 models can come later if shape turns out to matter).
+- **Shots**: lens 12-37 deg vertical (log-uniform), 60-130 m, pitch 30-90 deg with the
+  horizon kept out; ~30% empty, else a group of people, a herd of one kind, or a mix.
+- **Label margin**: real person boxes are looser than the bodies (median short side
+  12-17 px in HIT-UAV/BIRDSAI vs 7 px for tight id-mask boxes at the same lens and
+  altitude ranges), so sim boxes get the blur width plus 2 px per side
+  (`LABEL_MARGIN` in datagen). This is a stopgap. Part of the gap is our bodies being
+  too slim (no arms, legs together, no warm halo), and that part shrinks as bodies get
+  more realistic. Part is labellers' margin, and that stays, because real val is scored
+  against those boxes. Each time the bodies change, re-measure tight sim boxes against
+  real boxes at matched size and lower the margin by whatever the body gap closed.
+
+`compare_domains.py` on a 120-frame pool (one world) vs `runs/domain_real.csv`:
+
+| | sim phase 1 | BIRDSAI | HIT-UAV |
+|---|---|---|---|
+| person size, median | 13 px | 22 px | 15 px |
+| person minus surroundings | 90 (5.6x ring spread) | 130 (5.6x) | 109 (5.4x) |
+| animals, x ring spread | 3.3-5.9 | 3.6 | - |
+| noise (median neighbour diff) | 1.0 | 2.0 | 1.0 |
+| brightness p1-p99 | 46-215 | 72-191 | 52-195 |
+| empty frames | 44% | 27% | 41% |
+
+Pilot pool: `data/interim/sim_p1_w10` ... `sim_p1_w17` (8 worlds x 500 frames).
+
 Scope: thermal only, 640x512, white-hot; oblique and nadir views from 60-130 m; bush,
 grass and flooded terrain; day and night; people plus 3-4 animal shapes (deer, cattle,
 dog, boar).
@@ -157,10 +202,10 @@ dog, boar).
 ## Open questions
 
 - Assets: CC0 animal and human models with enough variety (candidates to verify:
-  Quaternius, Kenney, Poly Haven for terrain textures).
-- How to render "temperature" in Bevy 0.19 cleanly: unlit material with temperature as
-  emissive value plus a post-process pass, or a separate render target.
-- Headless rendering on Windows for `datagen` (Bevy screenshot API works with a window;
-  a hidden window may be enough).
+  Quaternius, Kenney, Poly Haven for terrain textures), if the primitive bodies turn out
+  to be too simple.
+- Answered in phase 1: temperature renders as unlit grey through a per-shot window, and
+  the sensor model runs on the CPU after capture; datagen keeps a visible window (a few
+  shots per second, both captures included).
 - What, if anything, to take from the CortenForge research on navigating noisy media for
   phase 3 controllers.

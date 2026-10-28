@@ -1,11 +1,13 @@
 //! Storm sim for aerial-animal-rescue. See `sim/PLAN.md`.
 //!
-//! `world` and `capture` don't depend on Bevy: terrain and placement use CortenForge, and
-//! capture turns any renderer's output into a dataset pool. `capture` is meant to move into
-//! a CortenForge crate later (see the Suggestions in `sim/FINDINGS.md`). `scene` is the
-//! Bevy side.
+//! Only `scene` depends on Bevy. `world` (terrain, on CortenForge), `thermal` (temperatures
+//! per shot), `sensor` (the thermal camera model) and `capture` (rendered frames -> dataset
+//! pool) work with any renderer; `capture` is meant to move into a CortenForge crate later
+//! (see the Suggestions in `sim/FINDINGS.md`).
 
 pub mod capture;
 pub mod rng;
 pub mod scene;
+pub mod sensor;
+pub mod thermal;
 pub mod world;

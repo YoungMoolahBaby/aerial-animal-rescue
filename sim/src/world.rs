@@ -54,22 +54,6 @@ impl Terrain {
         [n.x, n.z, n.y]
     }
 
-    /// True if the straight line from `a` to `b` (Bevy coordinates) stays above the ground,
-    /// checked every `step_m` metres. Used to skip objects hidden behind a hill.
-    pub fn line_of_sight(&self, a: [f64; 3], b: [f64; 3], step_m: f64) -> bool {
-        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2) + (b[2] - a[2]).powi(2)).sqrt();
-        let n = (len / step_m).ceil().max(1.0) as usize;
-        (1..n).all(|k| {
-            let t = k as f64 / n as f64;
-            let p = [
-                a[0] + t * (b[0] - a[0]),
-                a[1] + t * (b[1] - a[1]),
-                a[2] + t * (b[2] - a[2]),
-            ];
-            p[1] > self.height(p[0], p[2])
-        })
-    }
-
     /// A random spot on the ground within `radius` of the origin.
     pub fn random_spot(&self, rng: &mut Rng, radius: f64) -> [f64; 3] {
         let (x, z) = (rng.range(-radius, radius), rng.range(-radius, radius));
@@ -78,7 +62,7 @@ impl Terrain {
 }
 
 /// Fractal value noise in about [-1, 1].
-fn fbm(seed: u64, x: f64, y: f64, octaves: u32) -> f64 {
+pub fn fbm(seed: u64, x: f64, y: f64, octaves: u32) -> f64 {
     let (mut sum, mut amp, mut freq, mut norm) = (0.0, 1.0, 1.0, 0.0);
     for o in 0..octaves {
         sum += amp * (2.0 * value_noise(seed.wrapping_add(o as u64), x * freq, y * freq) - 1.0);
@@ -119,19 +103,6 @@ mod tests {
         let p = v[w * 50 + 70];
         assert!((a.height(p[0], p[2]) - p[1]).abs() < 1e-9);
         assert!(v.iter().all(|p| p[1].abs() <= 15.0));
-    }
-
-    #[test]
-    fn line_of_sight_is_blocked_by_ground() {
-        let t = Terrain::generate(2, 200.0, 2.0, 10.0);
-        let g = t.height(0.0, 0.0);
-        assert!(t.line_of_sight([0.0, g + 100.0, 0.0], [0.0, g + 1.0, 0.0], 1.0));
-        // from just above the ground to a point under it: blocked
-        assert!(!t.line_of_sight(
-            [0.0, g + 1.0, 0.0],
-            [30.0, t.height(30.0, 0.0) - 5.0, 0.0],
-            0.5
-        ));
     }
 
     #[test]

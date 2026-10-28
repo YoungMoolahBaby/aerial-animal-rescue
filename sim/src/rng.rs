@@ -25,6 +25,22 @@ impl Rng {
     pub fn range(&mut self, lo: f64, hi: f64) -> f64 {
         lo + (hi - lo) * self.unit()
     }
+
+    /// True with probability `p`.
+    pub fn chance(&mut self, p: f64) -> bool {
+        self.unit() < p
+    }
+
+    /// Uniform index in 0..n.
+    pub fn index(&mut self, n: usize) -> usize {
+        (self.unit() * n as f64) as usize
+    }
+
+    /// Standard normal (Box-Muller).
+    pub fn normal(&mut self) -> f64 {
+        let u = 1.0 - self.unit(); // (0, 1], so ln is finite
+        (-2.0 * u.ln()).sqrt() * (std::f64::consts::TAU * self.unit()).cos()
+    }
 }
 
 /// Hash of integer lattice coordinates to [0, 1), for value noise.
@@ -47,5 +63,14 @@ mod tests {
             assert_eq!(u, b.unit());
             assert!((0.0..1.0).contains(&u));
         }
+    }
+
+    #[test]
+    fn normal_has_unit_spread() {
+        let mut r = Rng::new(1);
+        let xs: Vec<f64> = (0..20_000).map(|_| r.normal()).collect();
+        let mean = xs.iter().sum::<f64>() / xs.len() as f64;
+        let var = xs.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / xs.len() as f64;
+        assert!(mean.abs() < 0.03 && (var - 1.0).abs() < 0.05);
     }
 }

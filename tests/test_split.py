@@ -196,3 +196,16 @@ def test_train_only_source_is_kept_whole_and_not_counted_for_empties():
     own = (df["source"] == "own").to_numpy()
     expected = sample_train_empty(alone, empty[own].reset_index(drop=True), frac=0.1, seed=0)
     assert keep[own].tolist() == expected.tolist()
+
+
+def test_synthetic_images_are_kept_whole_and_not_counted_for_empties():
+    base = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    df = frame(n_flights=20, frames_per_flight=5, n_synthetic=30)
+    df["split"] = assign_splits(df, seed=0)
+    empty = pd.Series([k % 5 != 0 for k in range(len(df))], index=df.index)
+    keep = sample_train_empty(df, empty, frac=0.1, seed=0)
+    syn = df["synthetic"].to_numpy()
+    assert keep[syn].all()
+    alone = base.assign(split=assign_splits(base, seed=0))
+    expected = sample_train_empty(alone, empty[~syn].reset_index(drop=True), frac=0.1, seed=0)
+    assert keep[~syn].tolist() == expected.tolist()

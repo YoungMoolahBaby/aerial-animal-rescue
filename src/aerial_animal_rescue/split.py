@@ -182,12 +182,13 @@ def sample_train_empty(
 
     Empty train images are taken round-robin across groups (flights), each group
     shuffled by `seed`, so the kept backgrounds come from as many flights as possible.
-    Sources in `train_only` are kept whole and left out of the count, so adding one
-    doesn't change which images of the other sources are kept.
+    Synthetic images and sources in `train_only` are kept whole and left out of the
+    count, so adding them (e.g. a sim pool) doesn't change which real images are kept.
     """
     if not 0 <= frac < 1:
         raise ValueError(f"frac must be in [0, 1), got {frac}")
-    train = (df["split"] == "train") & ~df["source"].isin(set(train_only))
+    synthetic = df["synthetic"].astype(bool) if "synthetic" in df else False
+    train = (df["split"] == "train") & ~df["source"].isin(set(train_only)) & ~synthetic
     candidates = train & empty
     n_keep = int(frac * int((train & ~empty).sum()) / (1 - frac))
     keys = group_keys(df[candidates], group_by, warn=False)

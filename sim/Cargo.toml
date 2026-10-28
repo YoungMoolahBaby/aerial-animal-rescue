@@ -12,6 +12,9 @@ description = "Storm and disaster sim for aerial-animal-rescue: synthetic data a
 # needed. See sim/FINDINGS.md: the sim umbrella itself can't be narrowed further.
 cortenforge = { version = "0.9.0", default-features = false, features = ["sim"] }
 bevy = "0.19.1"
+# Same version Bevy already builds (with JPEG); used to save frames compressed like the
+# real cameras' output.
+image = "0.25.10"
 
 # The first release build of Bevy is slow; dependencies don't change often.
 [profile.dev.package."*"]
