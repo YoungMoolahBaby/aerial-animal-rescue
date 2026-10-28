@@ -365,6 +365,29 @@ dog, boar).
         warm head; the broad male shoulders barely show.
       - Our capsule person has no warm head part at all.
       - Poses would need the free Universal Animation Library. Next after the animals.
+  - Result v4 (2026-10-28): same 4,000 shots as v3 (seeds 10-17), only the bodies
+    differ.
+
+    | | v3 primitives | v4 models |
+    |---|---|---|
+    | zero-shot (hituav) medium found, all / horse / cattle | 21% / 21% / 8% | 17% / 5% / 4% |
+    | sim-only 6 epochs, real val mAP50 (best epoch) | 0.087 | 0.055 |
+    | thermal mAP50 | 0.133 | 0.086 |
+    | flight 352 / 58 animals AP50 | 0.142 / 0.282 | 0.071 / 0.372 |
+    | flight 362 people AP50 | 0.774 | 0.723 |
+    | thermal alarms per empty frame, conf 0.25 | 0.93 | 0.47 |
+
+    - No gain on anything real val can show; the sim-only proxy swings 2-4x per epoch,
+      so this is "not better", not "worse".
+    - Why the measure can't credit them: real val has no thermal cattle, horses or dogs.
+      Its thermal animals are BIRDSAI wildlife (elephants, giraffes, ...; `other_animal`),
+      still primitive in the sim, and real cattle are RGB only. A real model finding a
+      body measures resemblance to elephants and people, not realism.
+    - Kept as an option (`--bodies`), off by default; v3 stays the training pool. The
+      models matter again once there is real thermal farm-animal data to judge them.
+    - Next, on what real val does measure: people (flights 361/362) with the Superhero
+      bodies and the animation library, and wildlife models (elephant, giraffe, rhino,
+      lion) for the BIRDSAI flights; plus the faint-target work for 361/61.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
