@@ -420,6 +420,47 @@ dog, boar).
       compact bright blob. Thin limbs at limb temperature and sprawled poses (lying,
       jogging, arms out) spread the body into a shape real people don't show at that size.
     - Not kept: v3's capsule people stay. `--bodies` and `--body-kinds` stay as options.
+- **Faint targets** (2026-10-28), aimed at flights 361 (tiny people) and 61 (tiny animals),
+  both still at 0.
+  - What makes them hard (`compare_domains.py` plus a band-pass clutter check; contrast =
+    peak minus surroundings, grey levels):
+
+    | | size | contrast | noise | target / background p99 at body scale |
+    |---|---|---|---|---|
+    | 361 people | 10 px | 50 | 5 | 1.69 (24.5 vs 14.9) |
+    | 362 people (found) | 26 px | 56 | 6 | 1.94 |
+    | 61 animals | 12 px | 59 | 2 | 0.55 (25.9 vs 45.0) |
+    | 58 animals (found) | 25 px | 114 | 2 | 2.93 |
+    | sim v3 | 15-25 px | 70-80 | 1 | 2.3 (37 vs 16) |
+
+    - 68% of 361's people are tiny (< 14 px), faint (< 60) and in a noisy frame (>= 4)
+      all at once; in v3 about 1% of targets are.
+    - Real thermal val is noisier than anything we train on: median frame noise 4 and
+      51% of frames >= 4. BIRDSAI overall is 2 and 23%, HIT-UAV 1 and 0%, sim v3 1
+      and 10%.
+    - 361's people are weak blobs (24.5 at body scale vs the sim's 37) in ordinary
+      mottle.
+    - 61 is a daytime riverbed: tiny animals on sun-warmed sand, in frames whose
+      strongest blobs are sunlit treetops and cold shadows. The sim's canopies have no
+      sun side or shadow.
+  - v6, sensor:
+    - Haze, fog or drizzle in 35% of frames (`haze` 0.3-0.8) takes contrast away
+      before the sensor; the auto-gain stretches it back, raw noise with it. Recorded as
+      `weather: fog`.
+    - Raw noise widened to 0.5-4 (log) and output noise to 1.5-9 (log).
+    - Both drawn so shots stay paired with v3; the weather has its own stream.
+    - Result: frame noise median 2, p75 5, p90 8, 36% of frames >= 4.
+  - Result v6 (sim-only, 6 epochs, real val; v3 in brackets):
+    - overall mAP50 0.076 (0.087), person 0.159 (0.162);
+    - tiny 0.008 (0.006), small 0.151 (0.138), medium 0.096 (0.181);
+    - flights 361 / 61: 0.013 / 0.000 (0.007 / 0.000);
+    - thermal alarms per empty frame 0.34 (0.93) at conf 0.25, 0.004 (0.095) at 0.5.
+    - Noise alone doesn't reach 361 or 61, but alarms fall by about two thirds.
+      Everything else is within the proxy's noise, except medium (flight 352).
+    - Kept as the new base: closer to the real noise, and far fewer alarms.
+  - Next: weak tiny bodies (1.5-2x the ground's mottle at body scale, like 361), and,
+    for 61, sunlit canopy (hot tops, cold shadows) with daytime bodies near the ground
+    temperature.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
