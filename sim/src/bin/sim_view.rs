@@ -71,7 +71,7 @@ fn controls(
     }
     *started = true;
     let kinds = ctl.kinds();
-    let shot = Shot::random(&mut shots.0, &world, &kinds, &ctl.posed());
+    let shot = Shot::random(&mut shots.0, &world, &kinds, &ctl.posed(), 0.0);
     let c = &shot.conditions;
     info!(
         "{} air {:.0} C{}, lens {:.0} deg, altitude {:.0} m, angle {:.0} deg, {} targets",

@@ -3,6 +3,7 @@
 //!
 //!     cargo run --release --bin datagen -- --out ../data/interim/sim_phase1 --frames 20 --seed 0
 //!
+//! `--faint-share 0.4` makes the bodies faint in that share of shots (v7; default 0).
 //! `--bodies assets/bodies` builds the kinds that have baked models (`scripts/bake_bodies.py`)
 //! from them instead of primitives; for a seed the shots are the same either way.
 //!
@@ -55,6 +56,7 @@ enum Capture {
 #[derive(Resource)]
 struct Datagen {
     frames: usize,
+    faint_share: f64,
     rng: Rng,
     writer: Option<PoolWriter>,
     params: String,
@@ -77,6 +79,8 @@ fn main() {
     let out = PathBuf::from(get("--out").expect("--out <pool folder> is required"));
     let frames: usize = get("--frames").map_or(20, |v| v.parse().expect("--frames is a number"));
     let seed: u64 = get("--seed").map_or(0, |v| v.parse().expect("--seed is a number"));
+    let faint_share: f64 =
+        get("--faint-share").map_or(0.0, |v| v.parse().expect("--faint-share is a number"));
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
     let only: Vec<String> = get("--body-kinds")
         .map(|k| k.split(',').map(str::to_string).collect())
@@ -93,11 +97,12 @@ fn main() {
         .insert_resource(models)
         .insert_resource(Datagen {
             frames,
+            faint_share,
             rng: Rng::new(seed),
             writer: Some(writer),
             params: String::from(
                 "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze\n",
+                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n",
             ),
             blank: 0,
             index: 0,
@@ -171,7 +176,8 @@ fn drive(
         }
         Phase::Place => {
             let kinds = ctl.kinds();
-            let shot = Shot::random(&mut dg.rng, &world, &kinds, &ctl.posed());
+            let share = dg.faint_share;
+            let shot = Shot::random(&mut dg.rng, &world, &kinds, &ctl.posed(), share);
             ctl.apply(&shot);
             dg.shot = Some(shot);
             dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Thermal);
@@ -303,7 +309,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         .expect("write label");
     writeln!(
         dg.params,
-        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{},{:.2}",
+        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{},{:.2},{}",
         c.night,
         c.air_c,
         c.sun_c,
@@ -330,6 +336,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         p.jpeg_quality,
         bodies,
         p.haze,
+        shot.faint,
     )
     .unwrap();
 }

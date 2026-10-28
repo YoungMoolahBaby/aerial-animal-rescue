@@ -337,12 +337,28 @@ pub struct Shot {
     /// Ground temperature per terrain vertex.
     pub ground_c: Vec<f64>,
     pub window: TempWindow,
+    /// Its bodies are faint: each stands out from the ground under it by only
+    /// `FAINT_GREY` grey levels of the render (see `Shot::random`'s `faint_share`).
+    pub faint: bool,
 }
+
+/// How far a faint body stands out from the ground under it, in grey levels of the
+/// render: like the tiny people of BIRDSAI flight 361 (about 1.6x the ground's mottle at
+/// body scale, where most sim bodies are 2.2x). Set in grey levels, not degrees: a body
+/// 2 C above the ground is bright in a cool field and nearly gone next to a sun-baked roof.
+const FAINT_GREY: (f64, f64) = (16.0, 60.0);
 
 impl Shot {
     /// `posed[k]`: pool body k carries its posture in its mesh (see `Target::posed`);
-    /// may be empty.
-    pub fn random(rng: &mut Rng, world: &World, kinds: &[Kind], posed: &[bool]) -> Self {
+    /// may be empty. `faint_share`: share of shots whose bodies are faint (v7 tried 0.4;
+    /// not kept, see PLAN.md).
+    pub fn random(
+        rng: &mut Rng,
+        world: &World,
+        kinds: &[Kind],
+        posed: &[bool],
+        faint_share: f64,
+    ) -> Self {
         let terrain = &world.terrain;
         // log-uniform: narrow lenses (HIT-UAV's people are 15x17 px straight down from 60 m)
         // as often as wide ones
@@ -498,7 +514,32 @@ impl Shot {
         }
         let road_c = conditions.road_c(rng);
 
-        let targets: Vec<Option<Placement>> = targets;
+        let mut targets: Vec<Option<Placement>> = targets;
+        // Faint shots draw from a stream of their own (seeded by where the camera looks),
+        // so every other draw, and the shots after, stay as they were.
+        let mut faint_rng = Rng::new(aim[0].to_bits() ^ aim[2].to_bits().rotate_left(29) ^ 0xFA17);
+        let faint = targets.iter().any(Option::is_some) && faint_rng.chance(faint_share);
+        if faint {
+            let scene = TempWindow::around(
+                ground_c
+                    .iter()
+                    .copied()
+                    .chain(clutter_c.iter().flatten().copied())
+                    .chain([road_c])
+                    .chain(conditions.water.map(|w| w.1)),
+            );
+            let per_grey = (scene.hi - scene.lo) / 255.0;
+            for p in targets.iter_mut().flatten() {
+                let at = p.transform.translation;
+                let ground = ground_at(at.x as f64, at.z as f64);
+                let old = p.temp_c[0] - ground;
+                let grey = faint_rng.range(FAINT_GREY.0.ln(), FAINT_GREY.1.ln()).exp();
+                let scale = grey * per_grey / old.abs().max(1e-6);
+                for t in &mut p.temp_c {
+                    *t = ground + (*t - ground) * scale;
+                }
+            }
+        }
         let window = TempWindow::around(
             ground_c
                 .iter()
@@ -520,6 +561,7 @@ impl Shot {
             road_c,
             ground_c,
             window,
+            faint,
         }
     }
 
@@ -1359,7 +1401,7 @@ mod tests {
         let mut rng = Rng::new(2);
         let mut empty = 0;
         for _ in 0..40 {
-            let s = Shot::random(&mut rng, &world, &kinds, &[]);
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.0);
             assert!((60.0..130.0).contains(&s.altitude_m));
             assert!(s.pitch_deg - s.vfov_deg / 2.0 >= 5.0);
             assert_eq!(s.targets.len(), kinds.len());
@@ -1381,8 +1423,8 @@ mod tests {
         let posed: Vec<bool> = kinds.iter().map(|&k| k == Kind::Person).collect();
         let (mut a, mut b) = (Rng::new(3), Rng::new(3));
         for _ in 0..20 {
-            let s = Shot::random(&mut a, &world, &kinds, &[]);
-            let t = Shot::random(&mut b, &world, &kinds, &posed);
+            let s = Shot::random(&mut a, &world, &kinds, &[], 0.0);
+            let t = Shot::random(&mut b, &world, &kinds, &posed, 0.0);
             assert_eq!(s.camera, t.camera);
             for ((p, q), &kind) in s.targets.iter().zip(&t.targets).zip(&kinds) {
                 let (Some(p), Some(q)) = (p, q) else {
@@ -1418,6 +1460,39 @@ mod tests {
             temp_c: [0.0; 3],
         };
         assert_eq!(variant_index(&p, 1), 0);
+    }
+
+    #[test]
+    fn faint_shots_keep_bodies_just_above_the_ground() {
+        let world = World::new(1);
+        let kinds = pool();
+        let mut rng = Rng::new(5);
+        let (mut faint, mut with_targets) = (0, 0);
+        for _ in 0..80 {
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.4);
+            if s.n_targets() == 0 {
+                assert!(!s.faint);
+                continue;
+            }
+            with_targets += 1;
+            if !s.faint {
+                continue;
+            }
+            faint += 1;
+            let c = &s.conditions;
+            for p in s.targets.iter().flatten() {
+                let t = p.transform.translation;
+                let (x, z) = (t.x as f64, t.z as f64);
+                let ground = c.ground_c(world.seed, x, z, world.terrain.normal(x, z));
+                let grey = (s.window.grey(p.temp_c[0]) - s.window.grey(ground)).abs() * 255.0;
+                assert!((11.0..=61.0).contains(&grey), "{grey} grey levels");
+            }
+        }
+        let share = faint as f64 / with_targets as f64;
+        assert!(
+            (0.2..0.6).contains(&share),
+            "{faint} faint of {with_targets}"
+        );
     }
 
     #[test]
