@@ -248,6 +248,22 @@ and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as i
     also be warmer than the ground.
   - Same 8 worlds, regenerated as `sim_p2_w10..17`. v1 is reproducible from commit
     1e18d03.
+  - Result (sim-only, 6 epochs, `runs/train/sim_only_p2`; real val):
+
+    | | v1 best | v2 best (ep 2) | v2 last (ep 6) | `hituav` (real) |
+    |---|---|---|---|---|
+    | mAP50 | 0.038 | 0.083 | 0.090 | 0.596 |
+    | tiny / small found | 8.3% / 24.6% | 0.9% / 23.5% | 0.0% / 19.5% | 6.7% / 27.6% |
+    | medium / large found | 3.8% / 0% | 12.2% / 3.4% | 31.0% / 44.8% | 86.7% / 100% |
+    | alarms per empty frame | 0.68 | 0.23 | 0.06 | 0.12 |
+    | flight 362 people AP50 | 0.658 | 0.819 | | 0.623 |
+    | flight 58 / 352 animals AP50 | 0.085 / 0.000 | 0.397 / 0.194 | | 0.154 / 0.860 |
+
+    The wildlife, pose and clutter changes worked. Sim-only now beats the real-trained
+    model on flights 362 and 58, and fires less than it does on empty frames. Tiny
+    objects regressed to about zero; 361, 60 and 61, all tiny, stay at zero. Suspect:
+    the 1-8 px ground specks look like tiny bodies, so they teach "a tiny warm dot is
+    background".
 - Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
   pixel, grass and leaves are sub-pixel, so they stay as texture.
 
