@@ -19,7 +19,9 @@ from aerial_animal_rescue.metadata import read_metadata
 from aerial_animal_rescue.sources import load_sources
 
 OWN_SOURCES = {"own"}
-SKIP_SOURCES = {"synthetic"} | OWN_SOURCES  # not in sources.yaml
+# Not in sources.yaml: our own footage, composites, and storm-sim renders (sim/). Their
+# per-image licenses are still checked (assets in them keep their licenses).
+SKIP_SOURCES = {"synthetic", "sim"} | OWN_SOURCES
 
 
 def check_publishable(meta: pd.DataFrame, sources_yaml: Path | None = None) -> list[str]:

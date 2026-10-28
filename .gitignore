@@ -37,3 +37,7 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+
+# --- Storm sim (Rust): build output, and the local cargo config that points it elsewhere
+sim/target/
+sim/.cargo/
