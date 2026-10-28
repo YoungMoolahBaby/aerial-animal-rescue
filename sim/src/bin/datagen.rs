@@ -97,7 +97,7 @@ fn main() {
             writer: Some(writer),
             params: String::from(
                 "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies\n",
+                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze\n",
             ),
             blank: 0,
             index: 0,
@@ -262,7 +262,9 @@ fn drive(
 fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
     let shot = dg.shot.take().expect("a shot was placed");
     let raw = dg.thermal.take().expect("thermal frame captured");
-    let p = SensorParams::random(&mut dg.rng);
+    // weather from its own stream, so the shots stay as in older pools
+    let mut weather = Rng::new(world.seed.wrapping_mul(0x9E37_79B9) ^ (dg.index as u64) << 20);
+    let p = SensorParams::random(&mut dg.rng).with_weather(&mut weather);
     let out = sensor::apply(&raw, IMAGE_W as usize, IMAGE_H as usize, &p, &mut dg.rng);
     // Match how the real data is labelled: people boxes there have a median short side of
     // 12-17 px where our tight id-mask boxes have 7 (same lens and altitude ranges), so
@@ -288,7 +290,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         source_license: "CC-BY-4.0".into(),
         modality: "thermal".into(),
         altitude_m: Some(shot.altitude_m),
-        weather: "clear".into(),
+        weather: p.weather().into(),
         scene_type: if c.water.is_some() { "flood" } else { "other" }.into(),
         sequence_id: format!("sim-world-{}", world.seed),
     };
@@ -301,7 +303,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         .expect("write label");
     writeln!(
         dg.params,
-        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{}",
+        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{},{:.2}",
         c.night,
         c.air_c,
         c.sun_c,
@@ -327,6 +329,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         p.out_hi,
         p.jpeg_quality,
         bodies,
+        p.haze,
     )
     .unwrap();
 }

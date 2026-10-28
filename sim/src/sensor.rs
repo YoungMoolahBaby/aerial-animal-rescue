@@ -1,8 +1,8 @@
 //! Thermal camera model: turns the renderer's temperature image into what an uncooled
 //! 640x512 core puts out. No Bevy here.
 //!
-//! Order follows the camera: optics blur, then noise and fixed-pattern stripes in raw
-//! counts, then auto-gain (a percentile stretch, the main reason the same scene looks
+//! Order follows the camera: haze between camera and ground, optics blur, then noise and
+//! fixed-pattern stripes in raw counts, then auto-gain (a percentile stretch, the main reason the same scene looks
 //! different from frame to frame), then output noise and 8-bit output. Compression happens
 //! when the image is saved (JPEG quality is part of the parameters), and half the frames
 //! first go through video-style compression; 40% are interlaced.
@@ -33,6 +33,11 @@ pub struct SensorParams {
     pub link_noise: f32,
     /// Temporal noise in raw grey levels (0-255 scale, before auto-gain).
     pub noise: f32,
+    /// Haze, fog or drizzle between camera and ground: the share of the scene's contrast
+    /// lost before the sensor (0 = clear). The auto-gain stretches what's left back out,
+    /// raw noise with it, so bodies come out faint in noise (BIRDSAI flight 361: 10 px
+    /// people 50 grey levels above the ground, in 5 levels of noise). See `with_weather`.
+    pub haze: f32,
     /// Noise in output grey levels, after auto-gain. Real footage shows 1-6 levels of
     /// pixel-to-pixel noise whatever the scene, so most of the noise is set here; raw
     /// noise alone would vanish whenever a hot roof widens the gain range.
@@ -71,8 +76,10 @@ impl SensorParams {
             // gentler than it looks: quality < 40 wiped out the noise real recordings keep
             video_quality: rng.chance(0.5).then(|| rng.range(40.0, 80.0) as u8),
             link_noise: rng.range(0.3, 2.0) as f32,
-            noise: rng.range(0.2, 0.8) as f32,
-            out_noise: log_range(rng, 0.8, 8.0),
+            // one draw, as before (shots stay paired with older pools)
+            noise: log_range(rng, 0.5, 4.0),
+            haze: 0.0,
+            out_noise: log_range(rng, 1.5, 9.0),
             blotch: log_range(rng, 0.3, 6.0),
             blotch_px: rng.range(1.0, 3.0) as f32,
             fpn_col: rng.range(0.0, 0.6) as f32,
@@ -88,6 +95,24 @@ impl SensorParams {
     }
 }
 
+impl SensorParams {
+    /// Draw the weather from its own stream (so the other draws, and the shots after,
+    /// stay as they were): 35% of frames hazy or foggy.
+    pub fn with_weather(mut self, rng: &mut Rng) -> Self {
+        self.haze = if rng.chance(0.35) {
+            rng.range(0.3, 0.8) as f32
+        } else {
+            0.0
+        };
+        self
+    }
+
+    /// The metadata's `weather` value.
+    pub fn weather(&self) -> &'static str {
+        if self.haze > 0.0 { "fog" } else { "clear" }
+    }
+}
+
 /// Log-uniform in [lo, hi).
 fn log_range(rng: &mut Rng, lo: f64, hi: f64) -> f32 {
     rng.range(lo.ln(), hi.ln()).exp() as f32
@@ -96,7 +121,13 @@ fn log_range(rng: &mut Rng, lo: f64, hi: f64) -> f32 {
 /// Apply the camera to a `width` x `height` grey render.
 pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mut Rng) -> Vec<u8> {
     assert_eq!(raw.len(), width * height);
-    let img: Vec<f32> = raw.iter().map(|&v| v as f32).collect();
+    let mut img: Vec<f32> = raw.iter().map(|&v| v as f32).collect();
+    if p.haze > 0.0 {
+        let mean = img.iter().sum::<f32>() / img.len() as f32;
+        for v in &mut img {
+            *v = mean + (*v - mean) * (1.0 - p.haze);
+        }
+    }
     let img = blur(&img, width, height, p.blur_sigma);
     let img = smear(&img, width, height, p.motion_px, p.motion_dir);
     let mut img = interlace(&img, width, height, p.interlace_px);
@@ -274,6 +305,7 @@ mod tests {
             video_quality: None,
             link_noise: 0.0,
             noise: 0.0,
+            haze: 0.0,
             out_noise: 0.0,
             blotch: 0.0,
             blotch_px: 1.0,
@@ -288,6 +320,59 @@ mod tests {
         let out = apply(&raw, 100, 100, &p, &mut Rng::new(0));
         assert_eq!(*out.iter().min().unwrap(), 20);
         assert_eq!(*out.iter().max().unwrap(), 220);
+    }
+
+    #[test]
+    fn haze_buries_a_body_in_raw_noise() {
+        // ground at 100, a 10x10 body at 140 in the middle, a hot roof corner at 250
+        let (w, h) = (100, 100);
+        let raw: Vec<u8> = (0..w * h)
+            .map(|k| {
+                let (x, y) = (k % w, k / w);
+                if (45..55).contains(&x) && (45..55).contains(&y) {
+                    140
+                } else if x < 10 && y < 10 {
+                    250
+                } else {
+                    100
+                }
+            })
+            .collect();
+        let snr = |haze: f32| {
+            let p = SensorParams {
+                blur_sigma: 0.0,
+                motion_px: 0.0,
+                motion_dir: 0.0,
+                interlace_px: 0.0,
+                video_quality: None,
+                link_noise: 0.0,
+                noise: 2.0,
+                haze,
+                out_noise: 0.0,
+                blotch: 0.0,
+                blotch_px: 1.0,
+                fpn_col: 0.0,
+                fpn_row: 0.0,
+                agc_lo_pct: 0.0,
+                agc_hi_pct: 100.0,
+                out_lo: 20.0,
+                out_hi: 220.0,
+                jpeg_quality: 90,
+            };
+            let out: Vec<f32> = apply(&raw, w, h, &p, &mut Rng::new(1))
+                .iter()
+                .map(|&v| v as f32)
+                .collect();
+            let at = |x: usize, y: usize| out[y * w + x];
+            let body = (45..55).map(|i| at(i, 50)).sum::<f32>() / 10.0;
+            let ground: Vec<f32> = (20..40).map(|i| at(i, 80)).collect();
+            let g = ground.iter().sum::<f32>() / 20.0;
+            let sd = (ground.iter().map(|v| (v - g) * (v - g)).sum::<f32>() / 20.0).sqrt();
+            (body - g) / sd.max(0.1)
+        };
+        let (clear, foggy) = (snr(0.0), snr(0.7));
+        assert!(foggy < clear * 0.6, "clear {clear}, foggy {foggy}");
+        assert_eq!(SensorParams::random(&mut Rng::new(0)).weather(), "clear");
     }
 
     #[test]
