@@ -254,6 +254,12 @@ dog, boar).
   - What to try: legs apart and walking poses, heads down grazing, people with arms and
     a warm head; then CC0 animal and human models if primitives aren't enough
     (Quaternius, Kenney; verify each license and record it per image).
+  - Real scans (searched 2026-10-28): the models built from real animal scans (SMAL,
+    hSMAL, VAREN from MPI; PFERD horse data) are licensed for non-commercial research
+    only and can't be shared on, so they can't go into the published CC-BY dataset
+    without MPI's written permission. No openly licensed scans of live cattle or horses
+    turned up. Sketchfab/Objaverse have CC-BY cow and horse models, mostly made by
+    artists; they're usable with per-image attribution, after checking each one.
   - How to judge: medium-size found rate in `scripts/zero_shot.py`, and the body-size
     gap behind `LABEL_MARGIN` (lower the margin by what closes).
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
