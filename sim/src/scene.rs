@@ -7,10 +7,12 @@
 //!   right after the thermal frame, it gives a visible-pixel mask per target, so boxes are
 //!   tight and hidden targets (behind a hill, a tree, under water) get no box.
 //!
-//! Bodies are built from primitives (capsules, spheres, cylinders): at 5-30 px the outline
-//! and size matter, not the detail, and there are no third-party asset licenses to track.
+//! Bodies are built from primitives (capsules, spheres, cylinders) or, for the kinds with
+//! baked models (`bodies.rs`, CC0 animals), from posed model meshes: at 5-30 px the outline
+//! and size matter, not the detail.
 
 use std::f32::consts::FRAC_PI_2;
+use std::path::Path;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -21,6 +23,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::Msaa;
 
+use crate::bodies::{self, Model};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
 use crate::world::Terrain;
@@ -100,6 +103,59 @@ impl Kind {
             Kind::Sheep => 5,
             Kind::Deer | Kind::Boar | Kind::Elephant | Kind::Giraffe | Kind::Lion => 6,
         }
+    }
+
+    /// Folder of its baked models under the `--bodies` directory.
+    pub fn dir_name(self) -> &'static str {
+        match self {
+            Kind::Person => "person",
+            Kind::Cattle => "cattle",
+            Kind::Horse => "horse",
+            Kind::Deer => "deer",
+            Kind::Sheep => "sheep",
+            Kind::Dog => "dog",
+            Kind::Boar => "boar",
+            Kind::Elephant => "elephant",
+            Kind::Giraffe => "giraffe",
+            Kind::Lion => "lion",
+        }
+    }
+}
+
+/// Baked models per kind; kinds without any keep their primitive bodies.
+#[derive(Default, Resource)]
+pub struct BodyModels(Vec<(Kind, Vec<Model>)>);
+
+impl BodyModels {
+    /// Every kind's models under `dir` (see `bodies.rs`).
+    pub fn load(dir: &Path) -> std::io::Result<Self> {
+        let mut out = Vec::new();
+        for &(kind, _) in &POOL {
+            let models = bodies::load_kind(dir, kind.dir_name())?;
+            if !models.is_empty() {
+                out.push((kind, models));
+            }
+        }
+        Ok(Self(out))
+    }
+
+    fn of(&self, kind: Kind) -> &[Model] {
+        self.0
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map_or(&[], |(_, m)| m.as_slice())
+    }
+
+    /// One line per kind, for the log.
+    pub fn summary(&self) -> String {
+        self.0
+            .iter()
+            .map(|(k, m)| {
+                let names: Vec<_> = m.iter().map(|m| m.name.as_str()).collect();
+                format!("{}: {}", k.dir_name(), names.join(", "))
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 }
 
@@ -214,6 +270,8 @@ const HEAD: usize = 2;
 pub struct Target {
     pub kind: Kind,
     pub id: u32,
+    /// "primitive", or the model and pose it was built from ("Cow:Walk@0.25").
+    pub body: String,
     /// Thermal materials of its torso, limbs and head.
     thermal: [Handle<StandardMaterial>; 3],
 }
@@ -569,6 +627,7 @@ pub fn spawn_scene(
     mats: &mut Assets<StandardMaterial>,
     world: &World,
     kinds: &[Kind],
+    models: &BodyModels,
 ) {
     assert!(
         kinds.len() * ID_STEP as usize <= 255,
@@ -689,7 +748,13 @@ pub fn spawn_scene(
         let id = k as u32 + 1;
         let thermal = [(); 3].map(|_| unlit(mats, Color::WHITE));
         let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
-        let parts = body_parts(meshes, &mut shapes, kind);
+        let (parts, body) = match models.of(kind) {
+            [] => (
+                body_parts(meshes, &mut shapes, kind),
+                "primitive".to_string(),
+            ),
+            m => model_parts(meshes, &mut shapes, m),
+        };
         commands
             .spawn((
                 Transform::default(),
@@ -697,6 +762,7 @@ pub fn spawn_scene(
                 Target {
                     kind,
                     id,
+                    body,
                     thermal: thermal.clone(),
                 },
             ))
@@ -951,6 +1017,33 @@ fn body_parts(
     parts
 }
 
+/// Meshes of a body from one of `models`, in a random pose (already facing +z, feet at 0).
+fn model_parts(
+    meshes: &mut Assets<Mesh>,
+    rng: &mut Rng,
+    models: &[Model],
+) -> (Vec<(Handle<Mesh>, Transform, usize)>, String) {
+    let model = &models[rng.index(models.len())];
+    let pose = &model.poses[rng.index(model.poses.len())];
+    let parts = pose
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| !p.indices.is_empty())
+        .map(|(k, p)| {
+            let mesh = Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, p.positions.clone())
+            .with_inserted_indices(Indices::U32(p.indices.clone()))
+            .with_computed_smooth_normals();
+            (meshes.add(mesh), Transform::default(), k)
+        })
+        .collect();
+    (parts, format!("{}:{}", model.name, pose.name))
+}
+
 /// Where an entity is and whether it shows, plus one marker component.
 type Placed<C> = (&'static mut Transform, &'static mut Visibility, &'static C);
 /// The water surface, kept apart from every other `Transform` query.
@@ -985,6 +1078,14 @@ impl SceneCtl<'_, '_> {
             .collect();
         t.sort_by_key(|x| x.0);
         t.into_iter().map(|x| x.1).collect()
+    }
+
+    /// What target `id`'s body was built from (see `Target::body`).
+    pub fn body_of(&self, id: u32) -> Option<&str> {
+        self.targets
+            .iter()
+            .find(|(_, _, t)| t.id == id)
+            .map(|(_, _, t)| t.body.as_str())
     }
 
     /// Class id of target `id`.

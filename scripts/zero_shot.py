@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from aerial_animal_rescue.classes import ClassRegistry
 from aerial_animal_rescue.evaluate import load_ground_truth, predict
 from aerial_animal_rescue.metadata import read_metadata
 from aerial_animal_rescue.zero_shot import summarize
@@ -64,6 +65,7 @@ def main() -> None:
     p.add_argument("--imgsz", type=int, default=1280)
     p.add_argument("--device", default=None)
     p.add_argument("--alarms", type=Path, help="folder for false-alarm crop sheets")
+    p.add_argument("--by-class", action="store_true", help="also print found rates per class")
     args = p.parse_args()
     if args.split == "test":
         raise SystemExit("the test set is held back until iterating is done")
@@ -86,6 +88,14 @@ def main() -> None:
         table = pd.DataFrame(res["by_size"]).T
         print(f"\n== {folder}: {len(images)} images")
         print(table.round(3).to_string())
+        if args.by_class:
+            names = ClassRegistry.from_yaml().names
+            found_by = {
+                names[c]: {b: f"{v['found_iou50']:.2f} ({v['boxes']})" for b, v in sizes.items()}
+                for c, sizes in res["by_class"].items()
+            }
+            print("found at IoU 0.5 per class (boxes):")
+            print(pd.DataFrame(found_by).T.fillna("-").to_string())
         alarms = res["alarms_per_empty_image"]
         print(
             f"alarms per empty image: {alarms:.2f} (of {res['empty_images']})"

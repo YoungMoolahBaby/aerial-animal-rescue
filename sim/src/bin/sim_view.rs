@@ -2,20 +2,25 @@
 //! Space draws a new random shot and prints its settings; I toggles the id look (each
 //! target in its own shade of red, what the labels are made from).
 //!
-//!     cargo run --release --bin sim_view [-- --seed 1]
+//!     cargo run --release --bin sim_view [-- --seed 1 --bodies assets/bodies]
 
 use bevy::prelude::*;
 use storm_sim::rng::Rng;
-use storm_sim::scene::{self, POOL, SceneCtl, Shot, World};
+use storm_sim::scene::{self, BodyModels, POOL, SceneCtl, Shot, World};
 
 #[derive(Resource)]
 struct Shots(Rng);
 
 fn main() {
-    let seed = arg("--seed").unwrap_or(0);
+    let seed = arg("--seed").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let models = arg("--bodies").map_or_else(BodyModels::default, |d| {
+        BodyModels::load(std::path::Path::new(&d)).unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
+    });
+    println!("body models: {}", models.summary());
     App::new()
         .add_plugins(DefaultPlugins.set(scene::window_plugin("storm sim: viewer")))
         .insert_resource(World::new(seed))
+        .insert_resource(models)
         .insert_resource(Shots(Rng::new(seed)))
         .add_systems(Startup, setup)
         .add_systems(Update, controls)
@@ -28,6 +33,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     world: Res<World>,
+    models: Res<BodyModels>,
 ) {
     let kinds: Vec<_> = POOL
         .iter()
@@ -40,6 +46,7 @@ fn setup(
         &mut mats,
         &world,
         &kinds,
+        &models,
     );
 }
 
@@ -75,10 +82,10 @@ fn controls(
     ctl.apply(&shot);
 }
 
-fn arg(name: &str) -> Option<u64> {
+fn arg(name: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     args.iter()
         .position(|a| a == name)
         .and_then(|i| args.get(i + 1))
-        .and_then(|v| v.parse().ok())
+        .cloned()
 }

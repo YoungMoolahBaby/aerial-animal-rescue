@@ -41,3 +41,5 @@ Thumbs.db
 # --- Storm sim (Rust): build output, and the local cargo config that points it elsewhere
 sim/target/
 sim/.cargo/
+# baked body models (scripts/bake_bodies.py; their sources are listed in sim/bodies.csv)
+sim/assets/

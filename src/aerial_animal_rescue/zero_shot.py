@@ -28,12 +28,14 @@ def size_bucket(area: float) -> str:
 
 
 def summarize(gts: list[np.ndarray], preds: list[np.ndarray], conf: float = 0.25) -> dict:
-    """Found rates per size (IoU 0.5 and a loose 0.1) and alarms on empty images.
+    """Found rates per size (IoU 0.5 and a loose 0.1) and alarms on empty images; also
+    the IoU 0.5 found rate per ground-truth class and size (`by_class`).
 
     `gts[i]` is (N, 5) class+xyxy, `preds[i]` is (M, 6) class+xyxy+score; predictions
     below `conf` are dropped.
     """
     rows = {name: [0, 0, 0] for name in SIZE_BUCKETS}  # boxes, found@0.5, found@0.1
+    per_class: dict[tuple[int, str], list[int]] = {}  # (class, size): boxes, found@0.5
     alarms, empty = 0, 0
     for gt, pred in zip(gts, preds, strict=True):
         p = pred[pred[:, 5] >= conf, 1:5] if len(pred) else np.zeros((0, 4))
@@ -43,11 +45,15 @@ def summarize(gts: list[np.ndarray], preds: list[np.ndarray], conf: float = 0.25
             alarms += len(p)
             continue
         hit50, hit10 = found(g, p, 0.5), found(g, p, 0.1)
-        for area, a, b in zip(box_area(g), hit50, hit10, strict=True):
-            r = rows[size_bucket(float(area))]
+        for cls, area, a, b in zip(gt[:, 0], box_area(g), hit50, hit10, strict=True):
+            bucket = size_bucket(float(area))
+            r = rows[bucket]
             r[0] += 1
             r[1] += int(a)
             r[2] += int(b)
+            c = per_class.setdefault((int(cls), bucket), [0, 0])
+            c[0] += 1
+            c[1] += int(a)
     by_size = {
         name: {"boxes": n, "found_iou50": f50 / n, "found_iou10": f10 / n}
         for name, (n, f50, f10) in rows.items()
@@ -56,6 +62,14 @@ def summarize(gts: list[np.ndarray], preds: list[np.ndarray], conf: float = 0.25
     return {
         "conf": conf,
         "by_size": by_size,
+        "by_class": {
+            cls: {
+                b: {"boxes": n, "found_iou50": f / n}
+                for (c, b), (n, f) in per_class.items()
+                if c == cls
+            }
+            for cls in sorted({c for c, _ in per_class})
+        },
         "empty_images": empty,
         "alarms_per_empty_image": alarms / empty if empty else None,
     }

@@ -33,3 +33,5 @@ def test_summarize_counts_found_and_alarms():
     assert res["by_size"]["medium (32-96px)"]["found_iou50"] == 0.0  # below conf
     assert res["empty_images"] == 2
     assert res["alarms_per_empty_image"] == 1.0
+    assert res["by_class"][0] == {"tiny (<16px)": {"boxes": 1, "found_iou50": 1.0}}
+    assert res["by_class"][6]["medium (32-96px)"]["found_iou50"] == 0.0

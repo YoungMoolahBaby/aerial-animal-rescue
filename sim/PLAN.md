@@ -21,6 +21,10 @@ Build and run (from `sim/`; the first release build of Bevy + CortenForge takes 
     cargo run --release --bin datagen -- --out ../runs/sim/test --frames 50 --seed 0
     cargo test --release
 
+Animal models (phase 2): `uv run python scripts/bake_bodies.py` (from the repo root)
+fetches the CC0 models in `sim/bodies.csv` and bakes them into `sim/assets/bodies/`;
+`--bodies assets/bodies` makes datagen and sim_view use them.
+
 `SIM_DEBUG=1` makes datagen also save each shot's raw render and id frame under
 `<pool>/../debug/` (to check labels against pixels).
 
@@ -337,6 +341,30 @@ dog, boar).
     artists; they're usable with per-image attribution, after checking each one.
   - How to judge: medium-size found rate in `scripts/zero_shot.py`, and the body-size
     gap behind `LABEL_MARGIN` (lower the margin by what closes).
+  - Progress (2026-10-28): animals first.
+    - Quaternius' Ultimate Animated Animal pack (CC0). Google Drive was over quota, so the
+      12 models came from poly.pizza (Quaternius' own uploads, CC0); each source is in
+      `sim/bodies.csv`.
+    - In use: Cow and Bull (cattle); Horse x2 and Donkey (horse, as `classes.yaml` has
+      it); Deer and Stag (deer); Husky and Shiba Inu (dog). Wolf, Fox and Alpaca are
+      left out for now.
+    - `scripts/bake_bodies.py` poses each model at 15 moments of its Idle, Idle_Headlow,
+      Eating, Walk and Gallop clips and splits it into the sim's temperature parts by
+      bone. Head and ears are the head. Lower legs, tail, horns, hooves and antlers are
+      limbs. The torso includes hips, thighs and shoulders. Each model is scaled to a
+      real nose-to-rump length.
+    - `datagen --bodies assets/bodies` builds those kinds from the models (a random
+      model and pose per pool body) and records each shot's bodies in `sim_params.csv`.
+      For a seed the shots are identical with or without `--bodies`, so the comparison
+      against v3 is like for like.
+    - People: the free Universal Base Characters pack (CC0) has only the "Superhero"
+      bodies, in a T-pose. Drawn at real pixel scales with the arms down:
+      - At 6-13 px/m (130 m on a wide lens, the faint flight-361 range) they are the same
+        blob as our capsule person.
+      - At 25-40 px/m (60 m on a narrow lens, like HIT-UAV) they show legs, arms and a
+        warm head; the broad male shoulders barely show.
+      - Our capsule person has no warm head part at all.
+      - Poses would need the free Universal Animation Library. Next after the animals.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the

@@ -3,6 +3,9 @@
 //!
 //!     cargo run --release --bin datagen -- --out ../data/interim/sim_phase1 --frames 20 --seed 0
 //!
+//! `--bodies assets/bodies` builds the kinds that have baked models (`scripts/bake_bodies.py`)
+//! from them instead of primitives; for a seed the shots are the same either way.
+//!
 //! A window opens while it renders (Bevy's screenshot path needs one) and closes when done.
 //! Each shot is captured twice: the thermal look, then the id look (`scene.rs`), each after
 //! a few frames so the picture matches the scene. The thermal frame goes through the
@@ -22,7 +25,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use image::codecs::jpeg::JpegEncoder;
 use storm_sim::capture::{PixelBox, PoolWriter, Record, boxes_from_id_mask, id_mask_from_rgb};
 use storm_sim::rng::Rng;
-use storm_sim::scene::{self, ID_STEP, IMAGE_H, IMAGE_W, POOL, SceneCtl, Shot, World};
+use storm_sim::scene::{self, BodyModels, ID_STEP, IMAGE_H, IMAGE_W, POOL, SceneCtl, Shot, World};
 use storm_sim::sensor::{self, SensorParams};
 
 const SETTLE_FRAMES: u32 = 4;
@@ -75,17 +78,22 @@ fn main() {
     let frames: usize = get("--frames").map_or(20, |v| v.parse().expect("--frames is a number"));
     let seed: u64 = get("--seed").map_or(0, |v| v.parse().expect("--seed is a number"));
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
+    let models = get("--bodies").map_or_else(BodyModels::default, |d| {
+        BodyModels::load(std::path::Path::new(&d)).unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
+    });
+    println!("body models: {}", models.summary());
 
     App::new()
         .add_plugins(DefaultPlugins.set(scene::window_plugin("storm sim: datagen")))
         .insert_resource(World::new(seed))
+        .insert_resource(models)
         .insert_resource(Datagen {
             frames,
             rng: Rng::new(seed),
             writer: Some(writer),
             params: String::from(
                 "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg\n",
+                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies\n",
             ),
             blank: 0,
             index: 0,
@@ -105,6 +113,7 @@ fn setup(
     mut images: ResMut<Assets<Image>>,
     mut mats: ResMut<Assets<StandardMaterial>>,
     world: Res<World>,
+    models: Res<BodyModels>,
 ) {
     let kinds: Vec<_> = POOL
         .iter()
@@ -117,6 +126,7 @@ fn setup(
         &mut mats,
         &world,
         &kinds,
+        &models,
     );
 }
 
@@ -231,7 +241,14 @@ fn drive(
                                 })
                             })
                             .collect();
-                    write_shot(&mut dg, &world, &boxes);
+                    // what each body in the shot is built from (CC0 models: sim/bodies.csv)
+                    let shot = dg.shot.as_ref().expect("a shot was placed");
+                    let bodies: Vec<&str> = (1..=shot.targets.len() as u32)
+                        .filter(|&id| shot.targets[id as usize - 1].is_some())
+                        .filter_map(|id| ctl.body_of(id))
+                        .collect();
+                    let bodies = bodies.join(";");
+                    write_shot(&mut dg, &world, &boxes, &bodies);
                     dg.phase = Phase::Place;
                 }
             }
@@ -239,7 +256,7 @@ fn drive(
     }
 }
 
-fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
+fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
     let shot = dg.shot.take().expect("a shot was placed");
     let raw = dg.thermal.take().expect("thermal frame captured");
     let p = SensorParams::random(&mut dg.rng);
@@ -264,7 +281,8 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
     dg.index += 1;
     let c = &shot.conditions;
     let record = Record {
-        source_license: "CC-BY-4.0".into(), // procedural world and bodies, no third-party assets
+        // procedural world; bodies procedural or CC0 models (sim/bodies.csv, no conditions)
+        source_license: "CC-BY-4.0".into(),
         modality: "thermal".into(),
         altitude_m: Some(shot.altitude_m),
         weather: "clear".into(),
@@ -280,7 +298,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         .expect("write label");
     writeln!(
         dg.params,
-        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{}",
+        "{image_id},{},{:.1},{:.1},{},{:.3},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{:.1},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{}",
         c.night,
         c.air_c,
         c.sun_c,
@@ -305,6 +323,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
         p.out_lo,
         p.out_hi,
         p.jpeg_quality,
+        bodies,
     )
     .unwrap();
 }
