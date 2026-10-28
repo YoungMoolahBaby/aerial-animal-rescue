@@ -78,8 +78,12 @@ fn main() {
     let frames: usize = get("--frames").map_or(20, |v| v.parse().expect("--frames is a number"));
     let seed: u64 = get("--seed").map_or(0, |v| v.parse().expect("--seed is a number"));
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
+    let only: Vec<String> = get("--body-kinds")
+        .map(|k| k.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
     let models = get("--bodies").map_or_else(BodyModels::default, |d| {
-        BodyModels::load(std::path::Path::new(&d)).unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
+        BodyModels::load(std::path::Path::new(&d), &only)
+            .unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
     });
     println!("body models: {}", models.summary());
 
@@ -167,7 +171,7 @@ fn drive(
         }
         Phase::Place => {
             let kinds = ctl.kinds();
-            let shot = Shot::random(&mut dg.rng, &world, &kinds);
+            let shot = Shot::random(&mut dg.rng, &world, &kinds, &ctl.posed());
             ctl.apply(&shot);
             dg.shot = Some(shot);
             dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Thermal);
@@ -244,8 +248,7 @@ fn drive(
                     // what each body in the shot is built from (CC0 models: sim/bodies.csv)
                     let shot = dg.shot.as_ref().expect("a shot was placed");
                     let bodies: Vec<&str> = (1..=shot.targets.len() as u32)
-                        .filter(|&id| shot.targets[id as usize - 1].is_some())
-                        .filter_map(|id| ctl.body_of(id))
+                        .filter_map(|id| ctl.body_of(id, shot))
                         .collect();
                     let bodies = bodies.join(";");
                     write_shot(&mut dg, &world, &boxes, &bodies);

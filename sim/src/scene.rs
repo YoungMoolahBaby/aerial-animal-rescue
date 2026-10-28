@@ -127,23 +127,20 @@ impl Kind {
 pub struct BodyModels(Vec<(Kind, Vec<Model>)>);
 
 impl BodyModels {
-    /// Every kind's models under `dir` (see `bodies.rs`).
-    pub fn load(dir: &Path) -> std::io::Result<Self> {
+    /// The models under `dir` (see `bodies.rs`) of the kinds named in `only` (folder names
+    /// such as "person"; empty = every kind that has some).
+    pub fn load(dir: &Path, only: &[String]) -> std::io::Result<Self> {
         let mut out = Vec::new();
         for &(kind, _) in &POOL {
+            if !only.is_empty() && !only.iter().any(|k| k == kind.dir_name()) {
+                continue;
+            }
             let models = bodies::load_kind(dir, kind.dir_name())?;
             if !models.is_empty() {
                 out.push((kind, models));
             }
         }
         Ok(Self(out))
-    }
-
-    fn of(&self, kind: Kind) -> &[Model] {
-        self.0
-            .iter()
-            .find(|(k, _)| *k == kind)
-            .map_or(&[], |(_, m)| m.as_slice())
     }
 
     /// One line per kind, for the log.
@@ -266,15 +263,25 @@ const LIMB: usize = 1;
 const HEAD: usize = 2;
 
 /// A body we label. `id` is 1-based and is its colour in the id render.
+///
+/// A body built from models has one child per model and pose (a variant); each shot shows
+/// one of them (`variant_index`). A primitive body has a single variant.
 #[derive(Component)]
 pub struct Target {
     pub kind: Kind,
     pub id: u32,
-    /// "primitive", or the model and pose it was built from ("Cow:Walk@0.25").
-    pub body: String,
+    /// Per variant: "primitive", or the model and pose ("Cow:Walk@0.25").
+    pub bodies: Vec<String>,
+    variants: Vec<Entity>,
+    /// Its posture is in the mesh (model people), so `pose` only turns and scales it.
+    pub posed: bool,
     /// Thermal materials of its torso, limbs and head.
     thermal: [Handle<StandardMaterial>; 3],
 }
+
+/// One way a target can look; children of a `Target`.
+#[derive(Component)]
+struct Variant;
 
 #[derive(Component)]
 pub struct Clutter {
@@ -333,7 +340,9 @@ pub struct Shot {
 }
 
 impl Shot {
-    pub fn random(rng: &mut Rng, world: &World, kinds: &[Kind]) -> Self {
+    /// `posed[k]`: pool body k carries its posture in its mesh (see `Target::posed`);
+    /// may be empty.
+    pub fn random(rng: &mut Rng, world: &World, kinds: &[Kind], posed: &[bool]) -> Self {
         let terrain = &world.terrain;
         // log-uniform: narrow lenses (HIT-UAV's people are 15x17 px straight down from 60 m)
         // as often as wide ones
@@ -380,7 +389,8 @@ impl Shot {
         let targets = kinds
             .iter()
             .zip(&chosen)
-            .map(|(&kind, &on)| {
+            .enumerate()
+            .map(|(k, (&kind, &on))| {
                 on.then(|| {
                     let (x, z) = (
                         cx + rng.range(-group_r, group_r),
@@ -392,7 +402,7 @@ impl Shot {
                     let limb = ground + (torso - ground) * rng.range(0.5, 0.85);
                     let head = ground + (torso - ground) * rng.range(1.0, 1.2);
                     Placement {
-                        transform: pose(rng, kind, feet),
+                        transform: pose(rng, kind, feet, posed.get(k) == Some(&true)),
                         temp_c: [torso, limb, head],
                     }
                 })
@@ -562,13 +572,15 @@ fn choose_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
     chosen
 }
 
-/// Random pose and size at `feet`: people stand, sit or lie; animals stand or lie.
-fn pose(rng: &mut Rng, kind: Kind, feet: Vec3) -> Transform {
+/// Random pose and size at `feet`: people stand, sit or lie; animals stand or lie. A
+/// `posed` body (its posture is in its mesh) is only turned and scaled, with the same
+/// random draws, so shots match those of primitive bodies.
+fn pose(rng: &mut Rng, kind: Kind, feet: Vec3, posed: bool) -> Transform {
     let yaw = Quat::from_rotation_y(rng.range(0.0, std::f64::consts::TAU) as f32);
     let s = rng.range(0.85, 1.15) as f32;
     if kind == Kind::Person {
         let u = rng.unit();
-        if u < 0.5 {
+        if u < 0.5 || posed {
             Transform::from_translation(feet)
                 .with_rotation(yaw)
                 .with_scale(Vec3::splat(s))
@@ -744,41 +756,61 @@ pub fn spawn_scene(
         clutter.push(set);
     }
 
+    // every model and pose of a kind, meshed once and shared by its pool bodies
+    let model_variants: Vec<(Kind, Vec<BodyVariant>)> = models
+        .0
+        .iter()
+        .map(|(kind, m)| (*kind, model_variants(meshes, m)))
+        .collect();
     for (k, &kind) in kinds.iter().enumerate() {
         let id = k as u32 + 1;
         let thermal = [(); 3].map(|_| unlit(mats, Color::WHITE));
         let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
-        let (parts, body) = match models.of(kind) {
-            [] => (
-                body_parts(meshes, &mut shapes, kind),
-                "primitive".to_string(),
-            ),
-            m => model_parts(meshes, &mut shapes, m),
+        // drawn for model kinds too, so the primitive bodies after them stay the same
+        let primitive = body_parts(meshes, &mut shapes, kind);
+        let modelled = model_variants.iter().find(|(k, _)| *k == kind);
+        let variants = match modelled {
+            Some((_, v)) => v.clone(),
+            None => vec![("primitive".to_string(), primitive)],
         };
-        commands
-            .spawn((
-                Transform::default(),
-                Visibility::Hidden,
-                Target {
-                    kind,
-                    id,
-                    body,
-                    thermal: thermal.clone(),
-                },
-            ))
-            .with_children(|body| {
-                for (mesh, tf, part) in parts {
-                    body.spawn((
-                        Mesh3d(mesh),
-                        MeshMaterial3d(thermal[part].clone()),
-                        tf,
-                        Look {
-                            thermal: thermal[part].clone(),
-                            id: id_mat.clone(),
-                        },
-                    ));
-                }
-            });
+        let target = commands
+            .spawn((Transform::default(), Visibility::Hidden))
+            .id();
+        let entities: Vec<Entity> = variants
+            .iter()
+            .enumerate()
+            .map(|(v, (_, parts))| {
+                let shown = if v == 0 {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                commands
+                    .spawn((Transform::default(), shown, Variant, ChildOf(target)))
+                    .with_children(|body| {
+                        for (mesh, tf, part) in parts {
+                            body.spawn((
+                                Mesh3d(mesh.clone()),
+                                MeshMaterial3d(thermal[*part].clone()),
+                                *tf,
+                                Look {
+                                    thermal: thermal[*part].clone(),
+                                    id: id_mat.clone(),
+                                },
+                            ));
+                        }
+                    })
+                    .id()
+            })
+            .collect();
+        commands.entity(target).insert(Target {
+            kind,
+            id,
+            bodies: variants.into_iter().map(|(name, _)| name).collect(),
+            variants: entities,
+            posed: kind == Kind::Person && modelled.is_some(),
+            thermal: thermal.clone(),
+        });
     }
     commands.insert_resource(SceneHandles {
         terrain_mesh,
@@ -1017,35 +1049,57 @@ fn body_parts(
     parts
 }
 
-/// Meshes of a body from one of `models`, in a random pose (already facing +z, feet at 0).
-fn model_parts(
-    meshes: &mut Assets<Mesh>,
-    rng: &mut Rng,
-    models: &[Model],
-) -> (Vec<(Handle<Mesh>, Transform, usize)>, String) {
-    let model = &models[rng.index(models.len())];
-    let pose = &model.poses[rng.index(model.poses.len())];
-    let parts = pose
-        .parts
-        .iter()
-        .enumerate()
-        .filter(|(_, p)| !p.indices.is_empty())
-        .map(|(k, p)| {
-            let mesh = Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::default(),
-            )
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, p.positions.clone())
-            .with_inserted_indices(Indices::U32(p.indices.clone()))
-            .with_computed_smooth_normals();
-            (meshes.add(mesh), Transform::default(), k)
-        })
-        .collect();
-    (parts, format!("{}:{}", model.name, pose.name))
+/// A name ("Cow:Walk@0.25") and the meshes of one way a body can look.
+type BodyVariant = (String, Vec<(Handle<Mesh>, Transform, usize)>);
+
+/// Every model and pose of a kind as meshes (already facing +z, feet at 0).
+fn model_variants(meshes: &mut Assets<Mesh>, models: &[Model]) -> Vec<BodyVariant> {
+    let mut out = Vec::new();
+    for model in models {
+        for pose in &model.poses {
+            let parts = pose
+                .parts
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !p.indices.is_empty())
+                .map(|(k, p)| {
+                    let mesh = Mesh::new(
+                        PrimitiveTopology::TriangleList,
+                        RenderAssetUsages::default(),
+                    )
+                    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, p.positions.clone())
+                    .with_inserted_indices(Indices::U32(p.indices.clone()))
+                    .with_computed_smooth_normals();
+                    (meshes.add(mesh), Transform::default(), k)
+                })
+                .collect();
+            out.push((format!("{}:{}", model.name, pose.name), parts));
+        }
+    }
+    out
+}
+
+/// Which of `n` variants a placed body shows: a hash of where it stands, so picking one
+/// takes no random draws (shots stay identical whatever the bodies are built from).
+pub fn variant_index(p: &Placement, n: usize) -> usize {
+    let t = p.transform.translation;
+    let mut h = (t.x.to_bits() as u64) << 32 | t.z.to_bits() as u64;
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    (h % n.max(1) as u64) as usize
 }
 
 /// Where an entity is and whether it shows, plus one marker component.
 type Placed<C> = (&'static mut Transform, &'static mut Visibility, &'static C);
+/// Body variants, kept apart from the other `Visibility` queries.
+type VariantOnly = (
+    With<Variant>,
+    Without<AerialCamera>,
+    Without<Target>,
+    Without<Clutter>,
+    Without<WaterSurface>,
+);
 /// The water surface, kept apart from every other `Transform` query.
 type WaterOnly = (
     With<WaterSurface>,
@@ -1065,6 +1119,7 @@ pub struct SceneCtl<'w, 's> {
     targets: Query<'w, 's, Placed<Target>, Without<AerialCamera>>,
     clutter: Query<'w, 's, Placed<Clutter>, (Without<AerialCamera>, Without<Target>)>,
     water: Query<'w, 's, (&'static mut Transform, &'static mut Visibility), WaterOnly>,
+    variants: Query<'w, 's, &'static mut Visibility, VariantOnly>,
     looks: Query<'w, 's, (&'static Look, &'static mut MeshMaterial3d<StandardMaterial>)>,
 }
 
@@ -1080,12 +1135,22 @@ impl SceneCtl<'_, '_> {
         t.into_iter().map(|x| x.1).collect()
     }
 
-    /// What target `id`'s body was built from (see `Target::body`).
-    pub fn body_of(&self, id: u32) -> Option<&str> {
-        self.targets
+    /// Per pool body, in id order: is its posture in its mesh (see `Target::posed`)?
+    pub fn posed(&self) -> Vec<bool> {
+        let mut t: Vec<(u32, bool)> = self
+            .targets
             .iter()
-            .find(|(_, _, t)| t.id == id)
-            .map(|(_, _, t)| t.body.as_str())
+            .map(|(_, _, t)| (t.id, t.posed))
+            .collect();
+        t.sort_by_key(|x| x.0);
+        t.into_iter().map(|x| x.1).collect()
+    }
+
+    /// What target `id` looks like in `shot` (see `Target::bodies`); `None` if it isn't in it.
+    pub fn body_of(&self, id: u32, shot: &Shot) -> Option<&str> {
+        let p = shot.targets.get(id as usize - 1)?.as_ref()?;
+        let (_, _, t) = self.targets.iter().find(|(_, _, t)| t.id == id)?;
+        Some(t.bodies[variant_index(p, t.bodies.len())].as_str())
     }
 
     /// Class id of target `id`.
@@ -1181,6 +1246,16 @@ impl SceneCtl<'_, '_> {
                 Some(p) => {
                     *tf = p.transform;
                     *vis = Visibility::Inherited;
+                    let shown = variant_index(p, target.variants.len());
+                    for (v, &e) in target.variants.iter().enumerate() {
+                        if let Ok(mut vv) = self.variants.get_mut(e) {
+                            *vv = if v == shown {
+                                Visibility::Inherited
+                            } else {
+                                Visibility::Hidden
+                            };
+                        }
+                    }
                     for (h, &t) in target.thermal.iter().zip(&p.temp_c) {
                         if let Some(mut m) = self.mats.get_mut(h) {
                             m.base_color = grey(t);
@@ -1284,7 +1359,7 @@ mod tests {
         let mut rng = Rng::new(2);
         let mut empty = 0;
         for _ in 0..40 {
-            let s = Shot::random(&mut rng, &world, &kinds);
+            let s = Shot::random(&mut rng, &world, &kinds, &[]);
             assert!((60.0..130.0).contains(&s.altitude_m));
             assert!(s.pitch_deg - s.vfov_deg / 2.0 >= 5.0);
             assert_eq!(s.targets.len(), kinds.len());
@@ -1297,6 +1372,52 @@ mod tests {
             }
         }
         assert!((4..=24).contains(&empty), "{empty} empty shots of 40");
+    }
+
+    #[test]
+    fn posed_people_change_only_their_posture() {
+        let world = World::new(1);
+        let kinds = pool();
+        let posed: Vec<bool> = kinds.iter().map(|&k| k == Kind::Person).collect();
+        let (mut a, mut b) = (Rng::new(3), Rng::new(3));
+        for _ in 0..20 {
+            let s = Shot::random(&mut a, &world, &kinds, &[]);
+            let t = Shot::random(&mut b, &world, &kinds, &posed);
+            assert_eq!(s.camera, t.camera);
+            for ((p, q), &kind) in s.targets.iter().zip(&t.targets).zip(&kinds) {
+                let (Some(p), Some(q)) = (p, q) else {
+                    assert_eq!(p.is_some(), q.is_some());
+                    continue;
+                };
+                assert_eq!(p.temp_c, q.temp_c);
+                assert_eq!(p.transform.translation.xz(), q.transform.translation.xz());
+                if kind == Kind::Person {
+                    // upright: no squash, no tipping over
+                    assert!((q.transform.scale.y - q.transform.scale.x).abs() < 1e-6);
+                    assert!((q.transform.rotation * Vec3::Y).y > 0.999);
+                } else {
+                    assert_eq!(p.transform, q.transform);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn variants_are_picked_in_range_and_spread() {
+        let mut seen = [0usize; 5];
+        for i in 0..200 {
+            let p = Placement {
+                transform: Transform::from_xyz(i as f32 * 3.7, 0.0, i as f32 * -1.3),
+                temp_c: [0.0; 3],
+            };
+            seen[variant_index(&p, 5)] += 1;
+        }
+        assert!(seen.iter().all(|&n| n > 15), "{seen:?}");
+        let p = Placement {
+            transform: Transform::default(),
+            temp_c: [0.0; 3],
+        };
+        assert_eq!(variant_index(&p, 1), 0);
     }
 
     #[test]

@@ -26,6 +26,18 @@ def test_bones_map_to_temperature_parts():
     assert part_of("Neck2") == TORSO
 
 
+def test_human_bones_map_to_temperature_parts():
+    assert part_of("Head") == HEAD
+    assert part_of("neck_01") == HEAD
+    assert part_of("upperarm_l") == LIMB
+    assert part_of("index_02_r") == LIMB
+    assert part_of("calf_r") == LIMB
+    assert part_of("foot_l") == LIMB
+    assert part_of("thigh_l") == TORSO
+    assert part_of("spine_02") == TORSO
+    assert part_of("pelvis") == TORSO
+
+
 def test_horns_hooves_and_named_materials_are_cold():
     assert part_of_material("Horns") == LIMB
     assert part_of_material("Hooves") == LIMB

@@ -1,15 +1,18 @@
-"""Bake animated glTF animals into static body meshes for the storm sim.
+"""Bake animated glTF animals and people into static body meshes for the storm sim.
 
 Each model is posed at chosen moments of its animation clips (skinning on the CPU), split
 into the sim's three temperature parts by each vertex's strongest bone (torso, limbs,
-head), turned to face +z with the feet at y = 0, scaled to a real nose-to-rump length,
-and written as a small binary file that `sim/src/bodies.rs` reads:
+head), turned to face +z with the feet at y = 0, scaled to a real size (an animal's
+nose-to-rump length, a person's height), and written as a small binary file that
+`sim/src/bodies.rs` reads:
 
     b"AARB", u32 version, u32 poses, then per pose: u8 name length, name (utf-8), and per
     part (torso, limb, head): u32 vertices, u32 indices, f32 xyz * vertices, u32 indices.
 
 All little-endian. Bones are named like Quaternius' animal rig (Body, Torso*, Neck*,
-Head, Ear*, *Leg*, Tail*); see `part_of`.
+Head, Ear*, *Leg*, Tail*) or the UE-style human rig of Quaternius' characters (pelvis,
+spine_*, neck_01, Head, upperarm_*, thigh_*, calf_*, ...); see `part_of`. People take their
+clips from a separate animation library on the same rig (`Model(..., anim=...)`).
 """
 
 import json
@@ -44,12 +47,32 @@ POSES = [
     ("Gallop", [0.0, 0.33, 0.66]),
 ]
 
+# People (Universal Animation Library): standing, walking, running, crouching, kneeling,
+# lying. Not Sitting_Idle (it sits on a chair) or the swim clips (people stand on the
+# ground in the sim; floating in flood water would need its own placement).
+HUMAN_POSES = [
+    ("Idle_Loop", [0.0, 0.5]),
+    ("Idle_Talking_Loop", [0.3]),
+    ("Walk_Loop", [0.0, 0.25, 0.5, 0.75]),
+    ("Jog_Fwd_Loop", [0.0, 0.5]),
+    ("Crouch_Idle_Loop", [0.3]),
+    ("Crouch_Fwd_Loop", [0.5]),
+    ("Fixing_Kneeling", [0.5]),
+    ("Push_Loop", [0.5]),
+    ("Death01", [0.95, 1.0]),
+]
+
+HUMAN_LIMBS = ("upperarm", "lowerarm", "hand", "thumb", "index", "middle", "ring", "pinky")
+
 
 def part_of(bone: str) -> int:
-    """Temperature part of a bone: head and ears; the thin legs below the body (forearm
-    and gaskin down) and the tail; the rest is torso, hips and thighs included."""
-    if bone.startswith(("Head", "Ear")):
+    """Temperature part of a bone: head and ears (a person's neck too); the thin legs
+    below the body (forearm and gaskin down) and the tail; a person's arms, calves and
+    feet; the rest is torso, hips and thighs included."""
+    if bone.startswith(("Head", "Ear", "neck")):
         return HEAD
+    if bone.startswith(HUMAN_LIMBS + ("calf", "foot", "ball")):
+        return LIMB
     if bone.startswith(("FrontUpperLeg", "BackUpperLeg", "Tail", "FF", "IK", "Pole")):
         return LIMB
     if "LowerLeg" in bone:
@@ -73,6 +96,9 @@ class Gltf:
 
     @classmethod
     def read(cls, path: Path) -> "Gltf":
+        if path.suffix == ".gltf":
+            doc = json.loads(path.read_text(encoding="utf-8"))
+            return cls(doc, (path.parent / doc["buffers"][0]["uri"]).read_bytes())
         data = path.read_bytes()
         magic, _, _ = struct.unpack_from("<4sII", data, 0)
         if magic != b"glTF":
@@ -152,10 +178,16 @@ def sample(times: np.ndarray, values: np.ndarray, interp: str, t: float, rotatio
 
 
 class Model:
-    def __init__(self, gltf: Gltf, cold: tuple[str, ...] = ()):
+    """A skinned model. `anim` is another file on the same rig whose clips drive it; they
+    are matched by bone name and only rotations are copied (plus the pelvis height,
+    scaled), since bone lengths differ."""
+
+    def __init__(self, gltf: Gltf, cold: tuple[str, ...] = (), anim: Gltf | None = None):
         self.g = gltf
         self.cold = cold
+        self.src = anim or gltf
         nodes = gltf.doc["nodes"]
+        self.by_name = {n.get("name"): i for i, n in enumerate(nodes)}
         self.parent = {c: i for i, n in enumerate(nodes) for c in n.get("children", [])}
         self.rest = [
             (
@@ -166,12 +198,27 @@ class Model:
             for n in nodes
         ]
         self.clips = {
-            a.get("name", f"clip{i}"): a for i, a in enumerate(gltf.doc.get("animations", []))
+            a.get("name", f"clip{i}"): a for i, a in enumerate(self.src.doc.get("animations", []))
         }
 
     def clip_length(self, name: str) -> float:
         a = self.clips[name]
-        return max(float(self.g.accessor(s["input"]).max()) for s in a["samplers"])
+        return max(float(self.src.accessor(s["input"]).max()) for s in a["samplers"])
+
+    def _target(self, ch: dict) -> tuple[int, float] | None:
+        """Node a channel drives in this model, and the scale for its translations."""
+        if self.src is self.g:
+            return ch["target"]["node"], 1.0
+        src_node = self.src.doc["nodes"][ch["target"]["node"]]
+        node = self.by_name.get(src_node.get("name"))
+        if node is None or ch["target"]["path"] == "scale":
+            return None
+        if ch["target"]["path"] == "translation":
+            if src_node.get("name") != "pelvis":
+                return None
+            src_rest = np.linalg.norm(src_node.get("translation", [0, 0, 0]))
+            return node, float(np.linalg.norm(self.rest[node][0]) / max(src_rest, 1e-6))
+        return node, 1.0
 
     def globals(self, clip: str | None, t: float) -> list[np.ndarray]:
         local = [list(x) for x in self.rest]
@@ -181,15 +228,21 @@ class Model:
                 path = ch["target"]["path"]
                 if path not in ("translation", "rotation", "scale"):
                     continue
+                target = self._target(ch)
+                if target is None:
+                    continue
+                node, scale = target
                 s = a["samplers"][ch["sampler"]]
                 v = sample(
-                    self.g.accessor(s["input"])[:, 0],
-                    self.g.accessor(s["output"]).astype(float),
+                    self.src.accessor(s["input"])[:, 0],
+                    self.src.accessor(s["output"]).astype(float),
                     s.get("interpolation", "LINEAR"),
                     t,
                     path == "rotation",
                 )
-                local[ch["target"]["node"]][("translation", "rotation", "scale").index(path)] = v
+                if path == "translation":
+                    v = v * scale
+                local[node][("translation", "rotation", "scale").index(path)] = v
         nodes = self.g.doc["nodes"]
         out: list[np.ndarray | None] = [None] * len(nodes)
 
@@ -304,6 +357,13 @@ class Frame:
         )
         return cls(rot, centre, length_m / length)
 
+    @classmethod
+    def upright(cls, model: Model, height_m: float) -> "Frame":
+        """For people: glTF characters already face +z; scale to `height_m` tall."""
+        verts, _, _ = model.posed(None, 0.0)
+        centre = np.array([(verts[:, 0].max() + verts[:, 0].min()) / 2, 0.0, verts[:, 2].mean()])
+        return cls(np.eye(3), centre, height_m / (verts[:, 1].max() - verts[:, 1].min()))
+
     def apply(self, verts: np.ndarray) -> np.ndarray:
         v = (verts @ self.rotation.T - self.centre) * self.scale
         v[:, 1] -= v[:, 1].min()
@@ -311,13 +371,19 @@ class Frame:
 
 
 def bake(
-    path: Path, length_m: float, cold: tuple[str, ...] = ()
+    path: Path,
+    size_m: float,
+    cold: tuple[str, ...] = (),
+    anim: Path | None = None,
+    person: bool = False,
 ) -> list[tuple[str, list[tuple[np.ndarray, np.ndarray]]]]:
-    """Posed parts of one model: [(pose name, [(vertices, triangles) per part])]."""
-    model = Model(Gltf.read(path), cold)
-    frame = Frame.from_rest(model, length_m)
+    """Posed parts of one model: [(pose name, [(vertices, triangles) per part])].
+    `size_m` is an animal's nose-to-rump length or a person's height; `anim` is a file
+    whose clips drive the model (else its own)."""
+    model = Model(Gltf.read(path), cold, Gltf.read(anim) if anim else None)
+    frame = Frame.upright(model, size_m) if person else Frame.from_rest(model, size_m)
     out = []
-    for clip, fractions in POSES:
+    for clip, fractions in HUMAN_POSES if person else POSES:
         if clip not in model.clips:
             continue
         length = model.clip_length(clip)

@@ -13,8 +13,12 @@ struct Shots(Rng);
 
 fn main() {
     let seed = arg("--seed").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let only: Vec<String> = arg("--body-kinds")
+        .map(|k| k.split(',').map(str::to_string).collect())
+        .unwrap_or_default();
     let models = arg("--bodies").map_or_else(BodyModels::default, |d| {
-        BodyModels::load(std::path::Path::new(&d)).unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
+        BodyModels::load(std::path::Path::new(&d), &only)
+            .unwrap_or_else(|e| panic!("--bodies {d}: {e}"))
     });
     println!("body models: {}", models.summary());
     App::new()
@@ -67,7 +71,7 @@ fn controls(
     }
     *started = true;
     let kinds = ctl.kinds();
-    let shot = Shot::random(&mut shots.0, &world, &kinds);
+    let shot = Shot::random(&mut shots.0, &world, &kinds, &ctl.posed());
     let c = &shot.conditions;
     info!(
         "{} air {:.0} C{}, lens {:.0} deg, altitude {:.0} m, angle {:.0} deg, {} targets",
