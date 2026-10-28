@@ -12,8 +12,8 @@ two jobs:
 
 Both use one world: the same terrain, weather, animals and sensors.
 
-Status (2026-10-28): phase 0 done; phase 1 renderer done, 4,000-image pilot pool built,
-training experiment next.
+Status (2026-10-28): phases 0 and 1 done. The phase 1 pilot is a GO: adding 4,000 sim images
+improved real val (see the experiment result under phase 1). Phase 2 next.
 
 Build and run (from `sim/`; the first release build of Bevy + CortenForge takes ~18 min):
 
@@ -275,6 +275,28 @@ and 400 images. The last two come from `scripts/zero_shot.py` (area buckets as i
   real objects. Other v2/v3 differences are within the noise of these short runs
   (mAP swings 2-4x between epochs). In a mixed run, real empty frames supply real warm
   specks as negatives, so v3 goes into the mixed run.
+
+**Experiment result (2026-10-28): GO.** `sim_p3` = the `hituav` settings plus the 4,000
+v3 sim images; real data and splits identical. It early-stopped at epoch 54 with the
+best model at epoch 34. `runs/eval/sim_p3_val.json` vs `runs/eval/hituav_val.json`:
+
+| real val | hituav | sim_p3 |
+|---|---|---|
+| overall mAP50 / 50-95 | 0.596 / 0.316 | 0.604 / 0.330 |
+| thermal mAP50 / 50-95 | 0.442 / 0.159 | 0.475 / 0.201 |
+| person / other_animal / cattle (RGB) AP50 | 0.214 / 0.671 / 0.904 | 0.251 / 0.700 / 0.860 |
+| tiny thermal found (class-agnostic) | 6.7% | 11.9% |
+| flights 58 / 60 / 61 animals AP50 | 0.154 / 0.367 / 0.001 | 0.279 / 0.592 / 0.000 |
+| flights 361 / 362 people AP50 | 0.000 / 0.623 | 0.000 / 0.713 |
+| thermal alarms per empty frame, conf 0.25 / 0.5 | 0.169 / 0.042 | 0.131 / 0.044 |
+
+- Go criteria: 58 and 60 improved a lot and thermal alarms didn't rise.
+- 361 and 61, the faintest tiny targets, are still at zero.
+- RGB cattle dropped 0.04, mostly on two ICAERUS flights. Sim cattle are thermal-only,
+  so cross-talk is possible, but it's within the single-seed spread of flights with a
+  few hundred boxes. RGB alarms fell from 0.62 to 0.10 per empty frame.
+- One training run per side: check with a second seed before relying on differences
+  under ~0.05.
 - Detail is about outlines and temperature variation, not polygon count. At 4-10 cm a
   pixel, grass and leaves are sub-pixel, so they stay as texture.
 
