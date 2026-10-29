@@ -508,6 +508,33 @@ dog, boar).
     - v6 trades medium (flight 352, -0.04) for small (+0.08), in line with its wider
       noise. Both still beat real-only on thermal.
     - 361 and 61 stay at 0.
+  - Result: zoom test on 361 (is it a resolution limit?). Each val frame of flights 361, 362
+    and 61 cut into n x n tiles (25% overlap; boxes kept when >= 50% inside, clipped),
+    then `model.val` at imgsz 1280. The models already see these ~640 px frames at 2x, so
+    2x2 is ~4x and 3x3 ~6x. AP50 (recall):
+
+    | flight | tiles | hituav | sim_p3 | sim_p6 |
+    |---|---|---|---|---|
+    | 361 people | 1x1 | 0.000 (0.006) | 0.000 (0.009) | 0.006 (0.020) |
+    | | 2x2 | 0.002 (0.013) | 0.011 (0.036) | 0.001 (0.008) |
+    | | 3x3 | 0.003 (0.025) | 0.001 (0.012) | 0.000 (0.002) |
+    | 61 animals | 1x1 | 0.000 (0.003) | 0.000 (0.000) | 0.000 (0.000) |
+    | | 2x2 | 0.048 (0.112) | 0.004 (0.059) | 0.005 (0.029) |
+    | | 3x3 | 0.016 (0.117) | 0.004 (0.098) | 0.013 (0.077) |
+    | 362 people (control) | 1x1 | 0.651 (0.599) | 0.737 (0.602) | 0.802 (0.665) |
+    | | 2x2 | 0.662 (0.579) | 0.699 (0.606) | 0.722 (0.594) |
+    | | 3x3 | 0.576 (0.498) | 0.654 (0.645) | 0.690 (0.598) |
+
+    - Zooming doesn't find 361's people: at 3-6x the pixels no model gets past 0.04
+      recall. So 361 is not a resolution limit. The models don't take these faint
+      blobs in noise for people at any size, and neither real training data nor v7's
+      faint sim bodies taught them to.
+    - 61 gains a little recall with zoom (0.11 at 2x2) but almost no AP: partly size,
+      mostly the sunlit-canopy look.
+    - The control (362) holds up under zoom, slowly losing as people outgrow the
+      sizes trained on, so the test itself is sound.
+    - (Single-flight `model.val` numbers differ a little from `evaluate.py`'s
+      per-flight AP, e.g. 362 sim_p6 0.802 vs 0.759: different scope and thresholds.)
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
