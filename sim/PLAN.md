@@ -488,6 +488,26 @@ dog, boar).
       - Is 361 a detector-resolution limit rather than a data gap? Test with tiled,
         zoomed-in inference on 361 with the existing models.
     - 61 (sunlit canopy) is parked until those answer.
+  - Result: mixed run `sim_p6` (hituav settings + 4,000 v6 images, `D:/aar/processed_sim_p6`,
+    real images and splits identical to `sim_p3`; 60 epochs). Real val, `runs/eval/sim_p6_val.json`:
+
+    | val | hituav (real only) | sim_p3 (v3) | sim_p6 (v6) |
+    |---|---|---|---|
+    | overall mAP50 | 0.596 | 0.604 | 0.608 |
+    | thermal mAP50 | 0.442 | 0.475 | 0.464 |
+    | person / other_animal | 0.214 / 0.671 | 0.251 / 0.700 | 0.233 / 0.694 |
+    | cattle (RGB, no sim) | 0.904 | 0.860 | 0.898 |
+    | small / medium | 0.374 / 0.730 | 0.328 / 0.702 | 0.408 / 0.660 |
+    | thermal alarms per empty frame, conf 0.25 | 0.169 | 0.131 | 0.149 |
+    | flights 58 / 60 / 361 / 362 / 61 | .154 / .367 / 0 / .623 / 0 | .279 / .592 / 0 / .713 / 0 | .300 / .564 / .001 / .759 / 0 |
+
+    - v6 ties v3: the differences (0.01-0.04) are within run-to-run noise. Cattle,
+      which the sim doesn't touch, moved 0.04 between the two runs.
+    - The sim-only alarm cut doesn't carry over: with real data in the mix the alarm
+      rate is set by the real images.
+    - v6 trades medium (flight 352, -0.04) for small (+0.08), in line with its wider
+      noise. Both still beat real-only on thermal.
+    - 361 and 61 stay at 0.
 - RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
   cats (the classes with no real data yet).
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
