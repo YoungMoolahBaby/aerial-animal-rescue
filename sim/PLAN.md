@@ -535,8 +535,59 @@ dog, boar).
       sizes trained on, so the test itself is sound.
     - (Single-flight `model.val` numbers differ a little from `evaluate.py`'s
       per-flight AP, e.g. 362 sim_p6 0.802 vs 0.759: different scope and thresholds.)
-- RGB camera model; pasture, flood and debris scenes; cattle, horses, sheep/goats, dogs,
-  cats (the classes with no real data yet).
+- 361 and 61 parked (2026-10-29): the sim can't reach them without real faint-people
+  thermal data. v6 stays the thermal base. Next is what only the sim can add.
+- **RGB camera, pasture first** (2026-10-31). Real val can score RGB only on cattle: 197
+  ICAERUS frames from 4 flights, 758 cows. There are no real horses, sheep/goats, dogs or
+  cats anywhere yet. So the RGB look is judged on cattle, and the other classes ride on it.
+  - What the real RGB data is (train flights only; val stays the judge):
+    - DJI stills (4000x3000, 5280x3956) looking straight down at about 90 m.
+    - At training size (1280) a cow is 13x21 px (median).
+    - Ground median sRGB 95-143, from green pasture to straw.
+    - Cows are 55% white (near clipping), 20% black, 25% brown.
+    - Some flights have dark lens corners.
+    - Val flight 032 (121 frames, 102 empty) is a harvested field with round bales: the
+      RGB false alarms come from there.
+  - `datagen --modality rgb` (`rgb.rs`, `scene.rs`):
+    - 1280x960 frames, 45-60 deg lens, 60-150 m (log). 80% straight down, the rest
+      tilted 70-90 deg. No flood yet.
+    - Lit, matt materials. A sun (15-70 deg up) casts shadows; the sky fills them. 25%
+      of shots are overcast.
+    - MSAA on the picture only, so the id render stays exact. Boxes are padded by blur +
+      1 px.
+    - Ground: pasture 55%, dry grass 25%, stubble 20%. Per vertex, a second cover and
+      soil patches. A colour texture adds per-texel grain, lush clumps, dry tufts, dung
+      specks, and mowing or harvest stripes.
+    - Clutter: canopies with a leafy texture, stones, houses, cars. On 70% of stubble
+      shots, also 1-40 bales: round lying, round on end, or square; straw, white,
+      black or green wrap.
+    - Pool (31 bodies, the id render's limit): 5 people, 12 cattle, 5 horses, 7
+      sheep/goats, 2 dogs.
+    - Coats by kind:
+      - cattle white / Holstein patches / black / brown / cream;
+      - horses bay / chestnut / black / grey / palomino;
+      - wool from clean to muddy, some black faces;
+      - people in work clothes, hi-vis and dark, with skin or hair on the head.
+    - Camera model: white balance error, auto-exposure to a median of 95-145, vignette,
+      dark lens corners on 30% of frames, blur 0.2-0.6 px, light haze on 10%, contrast,
+      saturation, noise, JPEG 75-96.
+    - Thermal output is byte-identical to before, checked on a 24-frame pool.
+  - How it's judged:
+    - Sim-only: yolo11s, 6 epochs on 4,000 sim RGB frames (seeds 10-17), validated on
+      the 197 real RGB val frames (`runs/val_rgb.txt`). Main number: cattle AP50 with no
+      real RGB image in training. The real-only model gets 0.904 with real RGB cows in
+      training.
+    - Also the alarms on flight 032's empty frames. That rate swings across runs: the
+      real-only model gets 0.84 per empty frame at conf 0.25, and two mixed runs without
+      RGB sim got 0.13 and 0.03.
+    - Zero-shot: the real-trained model on sim RGB cattle, found rate by size.
+  - Not built yet:
+    - field structure: straight edges between fields, hedges, fences, narrow tracks with
+      wheel ruts (roads are still the thermal ribbons);
+    - farmyards;
+    - flood and debris in RGB;
+    - cats.
+- RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
 - Each addition is kept only if real val holds or improves.

@@ -10,20 +10,28 @@
 //! Bodies are built from primitives (capsules, spheres, cylinders) or, for the kinds with
 //! baked models (`bodies.rs`, CC0 animals), from posed model meshes: at 5-30 px the outline
 //! and size matter, not the detail.
+//!
+//! In an RGB run (`Modality::Rgb`) the first look is a daylight photo instead: lit
+//! materials in the shot's colours (`rgb.rs`), a sun that casts shadows and a sky, a 4:3
+//! camera looking (nearly) straight down like the DJI stills of the real RGB data, a farm
+//! pool (cattle, horses, sheep, dogs, people) and round and square bales on stubble.
 
 use std::f32::consts::FRAC_PI_2;
 use std::path::Path;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::ecs::system::SystemParam;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::Msaa;
 
 use crate::bodies::{self, Model};
+use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
 use crate::world::Terrain;
@@ -34,6 +42,71 @@ pub const IMAGE_H: u32 = 512;
 /// Vertical field of view range: 640x512 cores with 13-25 mm lenses (HIT-UAV's 25 mm is
 /// about 20 deg).
 pub const VFOV_DEG: (f64, f64) = (12.0, 37.0);
+/// RGB frames: 4:3 like the real DJI stills (4000x3000, 5280x3956), at the size training
+/// sees them (`imgsz` 1280).
+pub const RGB_W: u32 = 1280;
+pub const RGB_H: u32 = 960;
+/// Their wide lenses (77-84 deg diagonal) and heights: real cows are 13x21 px (median) at
+/// that size, which a 2.4 m sim cow is from about 110 m.
+const RGB_VFOV_DEG: (f64, f64) = (45.0, 60.0);
+const RGB_ALTITUDE_M: (f64, f64) = (60.0, 150.0);
+/// Full sun and full sky light (an overcast sky's), set so a white surface under both
+/// renders just below 1.0 at the camera's `RGB_EV100`; the camera model re-exposes.
+const SUN_LUX: f32 = 80_000.0;
+const SKY_NITS: f32 = 25_000.0;
+const RGB_EV100: f32 = 15.0;
+const PATCH_TEXTURES: usize = 4;
+
+/// Which camera a run renders for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]
+pub enum Modality {
+    Thermal,
+    Rgb,
+}
+
+impl Modality {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "thermal" => Some(Self::Thermal),
+            "rgb" => Some(Self::Rgb),
+            _ => None,
+        }
+    }
+
+    /// The metadata's `modality` value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Thermal => "thermal",
+            Self::Rgb => "rgb",
+        }
+    }
+
+    /// Frame width and height.
+    pub fn size(self) -> (u32, u32) {
+        match self {
+            Self::Thermal => (IMAGE_W, IMAGE_H),
+            Self::Rgb => (RGB_W, RGB_H),
+        }
+    }
+
+    /// The body pool, in id order.
+    pub fn kinds(self) -> Vec<Kind> {
+        let pool: &[(Kind, usize)] = match self {
+            Self::Thermal => &POOL,
+            Self::Rgb => &RGB_POOL,
+        };
+        pool.iter()
+            .flat_map(|&(k, n)| std::iter::repeat_n(k, n))
+            .collect()
+    }
+
+    fn clutter(self) -> &'static [(ClutterKind, usize)] {
+        match self {
+            Self::Thermal => &CLUTTER,
+            Self::Rgb => &RGB_CLUTTER,
+        }
+    }
+}
 /// Red step between target ids in the id render.
 pub const ID_STEP: u8 = 8;
 /// Terrain: wide enough that oblique views from 130 m don't see past its edge.
@@ -53,6 +126,9 @@ pub enum ClutterKind {
     Rock,
     House,
     Car,
+    /// Round bales (lying or on end) and square ones, on harvested fields (RGB only): the
+    /// real RGB model's false alarms come from such a field (ICAERUS flight 032).
+    Bale,
 }
 
 /// Kinds and how many of each the scene holds (in `ClutterKind` order).
@@ -61,6 +137,13 @@ const CLUTTER: [(ClutterKind, usize); 4] = [
     (ClutterKind::Rock, 10),
     (ClutterKind::House, 8),
     (ClutterKind::Car, 10),
+];
+const RGB_CLUTTER: [(ClutterKind, usize); 5] = [
+    (ClutterKind::Bush, 60),
+    (ClutterKind::Rock, 10),
+    (ClutterKind::House, 8),
+    (ClutterKind::Car, 10),
+    (ClutterKind::Bale, 40),
 ];
 
 /// What the pool of bodies holds; datagen picks from it per shot.
@@ -75,6 +158,17 @@ pub const POOL: [(Kind, usize); 10] = [
     (Kind::Elephant, 3),
     (Kind::Giraffe, 3),
     (Kind::Lion, 2),
+];
+
+/// The RGB pool: farm animals, people and dogs (cattle is what real RGB val can score;
+/// the rest have no real data yet). 31 bodies fill the id render; herds of up to 12 cattle
+/// like the real flights.
+pub const RGB_POOL: [(Kind, usize); 5] = [
+    (Kind::Person, 5),
+    (Kind::Cattle, 12),
+    (Kind::Horse, 5),
+    (Kind::Sheep, 7),
+    (Kind::Dog, 2),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -257,6 +351,10 @@ impl Road {
 #[derive(Component)]
 pub struct AerialCamera;
 
+/// The sun (RGB runs only).
+#[derive(Component)]
+pub struct Sun;
+
 /// Parts of a body with their own temperature: thin limbs lose heat, the head is warm.
 const TORSO: usize = 0;
 const LIMB: usize = 1;
@@ -275,8 +373,8 @@ pub struct Target {
     variants: Vec<Entity>,
     /// Its posture is in the mesh (model people), so `pose` only turns and scales it.
     pub posed: bool,
-    /// Thermal materials of its torso, limbs and head.
-    thermal: [Handle<StandardMaterial>; 3],
+    /// Picture (thermal or RGB) materials of its torso, limbs and head.
+    picture: [Handle<StandardMaterial>; 3],
 }
 
 /// One way a target can look; children of a `Target`.
@@ -291,10 +389,11 @@ pub struct Clutter {
 #[derive(Component)]
 pub struct WaterSurface;
 
-/// The two materials of a mesh; `SceneCtl::show_ids` swaps between them.
+/// The two materials of a mesh, the picture (thermal or RGB) and the id look;
+/// `SceneCtl::show_ids` swaps between them.
 #[derive(Component)]
 pub struct Look {
-    thermal: Handle<StandardMaterial>,
+    picture: Handle<StandardMaterial>,
     id: Handle<StandardMaterial>,
 }
 
@@ -306,6 +405,20 @@ pub struct SceneHandles {
     roads: Handle<StandardMaterial>,
     /// Per `ClutterKind`, CLUTTER_MATS materials shared by the parts of its instances.
     clutter: Vec<Vec<Handle<StandardMaterial>>>,
+    /// Black patches on white for piebald coats (RGB).
+    patches: Vec<Handle<Image>>,
+}
+
+/// The colours of an RGB shot (`rgb.rs`).
+#[derive(Clone, Debug)]
+pub struct RgbLook {
+    pub daylight: Daylight,
+    pub ground: Ground,
+    pub road: rgb::Rgb,
+    /// Per `ClutterKind`, the colours of its materials.
+    pub clutter: Vec<Vec<rgb::Rgb>>,
+    /// Per pool target, in spawn order; `None` = not in this shot.
+    pub coats: Vec<Option<Coat>>,
 }
 
 /// Where one body goes in a shot.
@@ -340,6 +453,8 @@ pub struct Shot {
     /// Its bodies are faint: each stands out from the ground under it by only
     /// `FAINT_GREY` grey levels of the render (see `Shot::random`'s `faint_share`).
     pub faint: bool,
+    /// Colours, for an RGB shot (the temperatures above are then unused).
+    pub rgb: Option<RgbLook>,
 }
 
 /// How far a faint body stands out from the ground under it, in grey levels of the
@@ -351,21 +466,40 @@ const FAINT_GREY: (f64, f64) = (16.0, 60.0);
 impl Shot {
     /// `posed[k]`: pool body k carries its posture in its mesh (see `Target::posed`);
     /// may be empty. `faint_share`: share of shots whose bodies are faint (v7 tried 0.4;
-    /// not kept, see PLAN.md).
+    /// not kept, see PLAN.md; thermal only).
+    ///
+    /// A thermal shot draws exactly what it drew before RGB existed, so thermal pools stay
+    /// byte for byte the same.
     pub fn random(
         rng: &mut Rng,
         world: &World,
         kinds: &[Kind],
         posed: &[bool],
         faint_share: f64,
+        modality: Modality,
     ) -> Self {
         let terrain = &world.terrain;
-        // log-uniform: narrow lenses (HIT-UAV's people are 15x17 px straight down from 60 m)
-        // as often as wide ones
-        let vfov_deg = rng.range(VFOV_DEG.0.ln(), VFOV_DEG.1.ln()).exp();
-        let altitude_m = rng.range(60.0, 130.0);
-        // keep the horizon out of the picture: the top edge looks at least 5 deg down
-        let pitch_deg = rng.range((vfov_deg / 2.0 + 5.0).max(30.0), 90.0);
+        let thermal = modality == Modality::Thermal;
+        let (vfov_deg, altitude_m, pitch_deg) = if thermal {
+            // log-uniform: narrow lenses (HIT-UAV's people are 15x17 px straight down from
+            // 60 m) as often as wide ones
+            let vfov_deg = rng.range(VFOV_DEG.0.ln(), VFOV_DEG.1.ln()).exp();
+            let altitude_m = rng.range(60.0, 130.0);
+            // keep the horizon out of the picture: the top edge looks at least 5 deg down
+            let pitch_deg = rng.range((vfov_deg / 2.0 + 5.0).max(30.0), 90.0);
+            (vfov_deg, altitude_m, pitch_deg)
+        } else {
+            // mapping and counting flights look straight down; some frames tilt a little
+            let vfov_deg = rng.range(RGB_VFOV_DEG.0, RGB_VFOV_DEG.1);
+            let (lo, hi) = RGB_ALTITUDE_M;
+            let altitude_m = rng.range(lo.ln(), hi.ln()).exp();
+            let pitch_deg = if rng.chance(0.8) {
+                90.0
+            } else {
+                rng.range(70.0, 90.0)
+            };
+            (vfov_deg, altitude_m, pitch_deg)
+        };
         let aim = terrain.random_spot(rng, 100.0);
         let yaw = rng.range(0.0, std::f64::consts::TAU);
         let back = altitude_m / pitch_deg.to_radians().tan();
@@ -384,14 +518,19 @@ impl Shot {
         };
         let camera = Transform::from_translation(eye).looking_at(target, up);
 
-        let flood = rng.chance(0.3).then(|| aim[1] + rng.range(-1.5, 1.0));
+        // no flood in RGB yet: real RGB val is all pasture, so start where it can judge
+        let flood = (thermal && rng.chance(0.3)).then(|| aim[1] + rng.range(-1.5, 1.0));
         let conditions = Conditions::random(rng, flood);
-        let ground_c: Vec<f64> = world
-            .vertices
-            .iter()
-            .zip(&world.normals)
-            .map(|(p, n)| conditions.ground_c(world.seed, p[0], p[2], *n))
-            .collect();
+        let ground_c: Vec<f64> = if thermal {
+            world
+                .vertices
+                .iter()
+                .zip(&world.normals)
+                .map(|(p, n)| conditions.ground_c(world.seed, p[0], p[2], *n))
+                .collect()
+        } else {
+            Vec::new()
+        };
         let ground_at =
             |x: f64, z: f64| conditions.ground_c(world.seed, x, z, terrain.normal(x, z));
 
@@ -425,15 +564,20 @@ impl Shot {
             })
             .collect();
 
+        let ground = (!thermal).then(|| Ground::random(rng));
+        let stubble = ground
+            .as_ref()
+            .is_some_and(|g| g.field == rgb::Field::Stubble);
         let mut clutter = Vec::new();
         let mut clutter_c = Vec::new();
-        for (kind, max) in CLUTTER {
+        for &(kind, max) in modality.clutter() {
             // houses and cars come in some scenes only (a farm, a village, a road)
             let n = match kind {
                 ClutterKind::Bush => rng.index(max + 1),
                 ClutterKind::Rock => rng.chance(0.4) as usize * (1 + rng.index(max)),
                 ClutterKind::House => rng.chance(0.35) as usize * (1 + rng.index(max)),
                 ClutterKind::Car => rng.chance(0.4) as usize * (1 + rng.index(max)),
+                ClutterKind::Bale => (stubble && rng.chance(0.7)) as usize * (1 + rng.index(max)),
             };
             let placed: Vec<Option<Transform>> = (0..max)
                 .map(|i| {
@@ -497,13 +641,15 @@ impl Shot {
                             )
                         }
                         ClutterKind::Car => at(ground + 0.7, Vec3::new(1.8, 1.5, 4.5)),
+                        // the parts carry the size (`clutter_parts`)
+                        ClutterKind::Bale => at(ground, Vec3::splat(rng.range(0.9, 1.1) as f32)),
                     }
                 })
                 .collect();
             let temps: Vec<f64> = (0..CLUTTER_MATS)
                 .map(|i| match kind {
                     ClutterKind::Bush => conditions.vegetation_c(rng),
-                    ClutterKind::Rock => conditions.clutter_c(rng),
+                    ClutterKind::Rock | ClutterKind::Bale => conditions.clutter_c(rng),
                     ClutterKind::House => conditions.building_c(rng),
                     ClutterKind::Car if i < CLUTTER_MATS / 2 => conditions.vehicle_c(rng),
                     ClutterKind::Car => conditions.glass_c(rng),
@@ -518,7 +664,7 @@ impl Shot {
         // Faint shots draw from a stream of their own (seeded by where the camera looks),
         // so every other draw, and the shots after, stay as they were.
         let mut faint_rng = Rng::new(aim[0].to_bits() ^ aim[2].to_bits().rotate_left(29) ^ 0xFA17);
-        let faint = targets.iter().any(Option::is_some) && faint_rng.chance(faint_share);
+        let faint = thermal && targets.iter().any(Option::is_some) && faint_rng.chance(faint_share);
         if faint {
             let scene = TempWindow::around(
                 ground_c
@@ -549,6 +695,32 @@ impl Shot {
                 .chain(targets.iter().flatten().flat_map(|p| p.temp_c))
                 .chain(conditions.water.map(|w| w.1)),
         );
+        let rgb = ground.map(|ground| RgbLook {
+            daylight: Daylight::random(rng),
+            ground,
+            road: rgb::road(rng),
+            clutter: modality
+                .clutter()
+                .iter()
+                .map(|&(kind, _)| {
+                    (0..CLUTTER_MATS)
+                        .map(|i| match kind {
+                            ClutterKind::Bush => rgb::canopy(rng),
+                            ClutterKind::Rock => rgb::stone(rng),
+                            ClutterKind::House => rgb::building(rng),
+                            ClutterKind::Car if i < CLUTTER_MATS / 2 => rgb::car(rng),
+                            ClutterKind::Car => rgb::glass(rng),
+                            ClutterKind::Bale => rgb::bale(rng),
+                        })
+                        .collect()
+                })
+                .collect(),
+            coats: kinds
+                .iter()
+                .zip(&targets)
+                .map(|(&kind, p)| p.as_ref().map(|_| Coat::random(rng, kind)))
+                .collect(),
+        });
         Self {
             altitude_m,
             pitch_deg,
@@ -562,6 +734,7 @@ impl Shot {
             ground_c,
             window,
             faint,
+            rgb,
         }
     }
 
@@ -590,11 +763,13 @@ fn choose_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
             .collect();
     }
     if u < 0.85 {
-        let animals: Vec<Kind> = POOL
-            .iter()
-            .map(|p| p.0)
-            .filter(|&k| k != Kind::Person)
-            .collect();
+        // the pool's animal kinds in pool order (for the thermal pool, POOL's order)
+        let mut animals: Vec<Kind> = Vec::new();
+        for &k in kinds {
+            if k != Kind::Person && !animals.contains(&k) {
+                animals.push(k);
+            }
+        }
         let herd = animals[rng.index(animals.len())];
         let n = 1 + rng.index(kinds.iter().filter(|&&k| k == herd).count());
         let mut k = 0;
@@ -649,13 +824,13 @@ fn pose(rng: &mut Rng, kind: Kind, feet: Vec3, posed: bool) -> Transform {
     }
 }
 
-pub fn window_plugin(title: &str) -> WindowPlugin {
+pub fn window_plugin(title: &str, modality: Modality) -> WindowPlugin {
+    let (w, h) = modality.size();
     WindowPlugin {
         primary_window: Some(Window {
             title: title.into(),
             // Exactly the sensor size, whatever the desktop scaling.
-            resolution: bevy::window::WindowResolution::new(IMAGE_W, IMAGE_H)
-                .with_scale_factor_override(1.0),
+            resolution: bevy::window::WindowResolution::new(w, h).with_scale_factor_override(1.0),
             resizable: false,
             ..default()
         }),
@@ -672,8 +847,22 @@ fn unlit(mats: &mut Assets<StandardMaterial>, color: Color) -> Handle<StandardMa
     })
 }
 
+/// A picture material: unlit (the colour is the temperature's grey) for thermal, lit and
+/// matt for RGB (fields, coats and roofs barely shine from 100 m).
+fn picture(mats: &mut Assets<StandardMaterial>, modality: Modality) -> Handle<StandardMaterial> {
+    mats.add(StandardMaterial {
+        base_color: Color::BLACK,
+        unlit: modality == Modality::Thermal,
+        perceptual_roughness: 0.95,
+        reflectance: 0.15,
+        cull_mode: None,
+        ..default()
+    })
+}
+
 /// Spawn the camera, terrain, water, clutter and the body pool (`kinds`, in order; ids
-/// 1, 2, ...). Everything is placed per shot by `SceneCtl::apply`.
+/// 1, 2, ...); for RGB also the sun. Everything is placed per shot by `SceneCtl::apply`.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_scene(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -682,30 +871,60 @@ pub fn spawn_scene(
     world: &World,
     kinds: &[Kind],
     models: &BodyModels,
+    modality: Modality,
 ) {
     assert!(
         kinds.len() * ID_STEP as usize <= 255,
         "too many targets for the id render"
     );
-    commands.spawn((
-        Camera3d::default(),
-        Camera {
-            clear_color: ClearColorConfig::Custom(Color::BLACK),
-            ..default()
-        },
-        Projection::Perspective(PerspectiveProjection {
-            fov: (VFOV_DEG.1 as f32).to_radians(),
-            near: 1.0,
-            far: 4000.0,
-            ..default()
-        }),
-        // Exact colours out: no tonemapping, no dither, no edge blending (the id render
-        // must stay exact; the sensor model blurs the thermal frame instead).
-        Tonemapping::None,
-        DebandDither::Disabled,
-        Msaa::Off,
-        AerialCamera,
-    ));
+    let rgb = modality == Modality::Rgb;
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            Camera {
+                clear_color: ClearColorConfig::Custom(Color::BLACK),
+                ..default()
+            },
+            Projection::Perspective(PerspectiveProjection {
+                fov: (VFOV_DEG.1 as f32).to_radians(),
+                near: 1.0,
+                far: 4000.0,
+                ..default()
+            }),
+            // Exact colours out: no tonemapping, no dither, no edge blending (the id render
+            // must stay exact; the sensor model blurs the thermal frame instead). RGB
+            // pictures get MSAA (`show_ids` turns it off for the id look), like a photo
+            // scaled down from 5 K.
+            Tonemapping::None,
+            DebandDither::Disabled,
+            Msaa::Off,
+            AerialCamera,
+        ))
+        .id();
+    if rgb {
+        commands
+            .entity(camera)
+            .insert((Msaa::Sample4, Exposure { ev100: RGB_EV100 }));
+        commands.spawn((
+            DirectionalLight {
+                shadow_maps_enabled: true,
+                ..default()
+            },
+            // from the camera (60-150 m up) to the far edge of an oblique frame
+            CascadeShadowConfigBuilder {
+                num_cascades: 2,
+                minimum_distance: 1.0,
+                first_cascade_far_bound: 180.0,
+                maximum_distance: 500.0,
+                ..default()
+            }
+            .build(),
+            Transform::default(),
+            Sun,
+        ));
+        // ~6 cm per texel near the camera: a cow's shadow keeps its outline
+        commands.insert_resource(DirectionalLightShadowMap { size: 4096 });
+    }
     // Green, so a real id frame is never all zeros (a blank capture is); terrain's vertex
     // colours scale it, red stays 0.
     let background = unlit(mats, Color::srgb(0.0, 1.0, 0.0));
@@ -717,7 +936,9 @@ pub fn spawn_scene(
     let ground = mats.add(StandardMaterial {
         base_color: Color::linear_rgb(texture_gain(), texture_gain(), texture_gain()),
         base_color_texture: Some(texture.clone()),
-        unlit: true,
+        unlit: !rgb,
+        perceptual_roughness: 1.0,
+        reflectance: 0.1,
         cull_mode: None,
         ..default()
     });
@@ -725,7 +946,7 @@ pub fn spawn_scene(
         Mesh3d(terrain_mesh.clone()),
         MeshMaterial3d(ground.clone()),
         Look {
-            thermal: ground,
+            picture: ground,
             id: background.clone(),
         },
     ));
@@ -739,22 +960,23 @@ pub fn spawn_scene(
         Visibility::Hidden,
         WaterSurface,
         Look {
-            thermal: water.clone(),
+            picture: water.clone(),
             id: background.clone(),
         },
     ));
 
-    let roads = unlit(mats, Color::BLACK);
+    let roads = picture(mats, modality);
     commands.spawn((
         Mesh3d(meshes.add(road_mesh(world))),
         MeshMaterial3d(roads.clone()),
         Look {
-            thermal: roads.clone(),
+            picture: roads.clone(),
             id: background.clone(),
         },
     ));
 
     let block = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
+    let cylinder = meshes.add(Cylinder::new(0.5, 1.0));
     let mut shapes = Rng::new(world.seed ^ 0x5_4A9E);
     let canopies: Vec<_> = (0..8)
         .map(|_| meshes.add(lumpy_blob(&mut shapes, 0.35, 0.3)))
@@ -762,22 +984,36 @@ pub fn spawn_scene(
     let stones: Vec<_> = (0..4)
         .map(|_| meshes.add(lumpy_blob(&mut shapes, 0.15, 0.15)))
         .collect();
+    // RGB canopies: leaf clusters and gaps, much coarser contrast than grass
+    let foliage = rgb.then(|| {
+        images.add(texture_image(ground_texture(
+            world.seed ^ 0xF0_11A6E,
+            TEX_SIZE,
+            0.35,
+            0.25,
+        )))
+    });
     let mut clutter = Vec::new();
-    for (kind, n) in CLUTTER {
+    for &(kind, n) in modality.clutter() {
         let set: Vec<_> = (0..CLUTTER_MATS)
             .map(|_| {
-                mats.add(StandardMaterial {
-                    base_color: Color::BLACK,
-                    // canopies are mottled like the ground
-                    base_color_texture: (kind == ClutterKind::Bush).then(|| texture.clone()),
-                    unlit: true,
-                    cull_mode: None,
-                    ..default()
-                })
+                let m = picture(mats, modality);
+                // canopies are mottled like the ground (thermal) or leafy (RGB)
+                if kind == ClutterKind::Bush {
+                    let t = foliage.clone().unwrap_or_else(|| texture.clone());
+                    mats.get_mut(&m).unwrap().base_color_texture = Some(t);
+                }
+                m
             })
             .collect();
         for _ in 0..n {
-            let parts = clutter_parts(&mut shapes, kind, &canopies, &stones, &block);
+            let shapes_of = ClutterShapes {
+                canopies: &canopies,
+                stones: &stones,
+                block: &block,
+                cylinder: &cylinder,
+            };
+            let parts = clutter_parts(&mut shapes, kind, &shapes_of);
             commands
                 .spawn((Transform::default(), Visibility::Hidden, Clutter { kind }))
                 .with_children(|c| {
@@ -788,7 +1024,7 @@ pub fn spawn_scene(
                             MeshMaterial3d(m.clone()),
                             tf,
                             Look {
-                                thermal: m,
+                                picture: m,
                                 id: background.clone(),
                             },
                         ));
@@ -806,7 +1042,7 @@ pub fn spawn_scene(
         .collect();
     for (k, &kind) in kinds.iter().enumerate() {
         let id = k as u32 + 1;
-        let thermal = [(); 3].map(|_| unlit(mats, Color::WHITE));
+        let materials = [(); 3].map(|_| picture(mats, modality));
         let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
         // drawn for model kinds too, so the primitive bodies after them stay the same
         let primitive = body_parts(meshes, &mut shapes, kind);
@@ -833,10 +1069,10 @@ pub fn spawn_scene(
                         for (mesh, tf, part) in parts {
                             body.spawn((
                                 Mesh3d(mesh.clone()),
-                                MeshMaterial3d(thermal[*part].clone()),
+                                MeshMaterial3d(materials[*part].clone()),
                                 *tf,
                                 Look {
-                                    thermal: thermal[*part].clone(),
+                                    picture: materials[*part].clone(),
                                     id: id_mat.clone(),
                                 },
                             ));
@@ -851,16 +1087,55 @@ pub fn spawn_scene(
             bodies: variants.into_iter().map(|(name, _)| name).collect(),
             variants: entities,
             posed: kind == Kind::Person && modelled.is_some(),
-            thermal: thermal.clone(),
+            picture: materials.clone(),
         });
     }
+    let patches = if rgb {
+        (0..PATCH_TEXTURES as u64)
+            .map(|k| images.add(patch_image(world.seed ^ (0x9A7C + k))))
+            .collect()
+    } else {
+        Vec::new()
+    };
     commands.insert_resource(SceneHandles {
         terrain_mesh,
         texture,
         water,
         roads,
         clutter,
+        patches,
     });
+}
+
+/// Black patches on white (Holstein cattle, piebald horses and dogs), wrapped round a
+/// primitive torso by its texture coordinates: a few big blobs around it, a couple along.
+fn patch_image(seed: u64) -> Image {
+    let (w, h) = (64usize, 32usize);
+    let mut grey = Vec::with_capacity(w * h);
+    for j in 0..h {
+        for i in 0..w {
+            let (u, v) = (i as f64 / w as f64, j as f64 / h as f64);
+            let n = crate::thermal::tiling_fbm(seed, u, v, 4.0);
+            grey.push(if n > 0.05 { 18 } else { 255 });
+        }
+    }
+    let mut img = Image::new(
+        Extent3d {
+            width: w as u32,
+            height: h as u32,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba(&grey),
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    img
 }
 
 /// Ribbons along the world's roads, a little above the ground (tracks, lanes, levees:
@@ -925,20 +1200,52 @@ fn lumpy_blob(rng: &mut Rng, rough: f64, mottle: f64) -> Mesh {
     mesh
 }
 
-/// Parts of one clutter instance in unit space (the shot scales the whole thing), each
-/// with an index into its kind's materials: the first half are the kind's main
-/// temperatures, the second half its secondary ones (car glass, the other roof half).
-/// A real model took smooth uniform discs and plain rectangles for animals (zero-shot
-/// test, 2026-10-28), so clutter is made irregular and two-tone, unlike bodies.
+/// The meshes clutter is built from.
+struct ClutterShapes<'a> {
+    canopies: &'a [Handle<Mesh>],
+    stones: &'a [Handle<Mesh>],
+    /// Unit cube and unit cylinder (radius 0.5, height 1).
+    block: &'a Handle<Mesh>,
+    cylinder: &'a Handle<Mesh>,
+}
+
+/// Parts of one clutter instance in unit space (the shot scales the whole thing; bales
+/// come at their real size), each with an index into its kind's materials: the first half
+/// are the kind's main temperatures, the second half its secondary ones (car glass, the
+/// other roof half). A real model took smooth uniform discs and plain rectangles for
+/// animals (zero-shot test, 2026-10-28), so clutter is made irregular and two-tone, unlike
+/// bodies. Bales are the exception: they are the smooth look-alikes real fields have.
 fn clutter_parts(
     rng: &mut Rng,
     kind: ClutterKind,
-    canopies: &[Handle<Mesh>],
-    stones: &[Handle<Mesh>],
-    block: &Handle<Mesh>,
+    shapes: &ClutterShapes,
 ) -> Vec<(Handle<Mesh>, Transform, usize)> {
+    let ClutterShapes {
+        canopies,
+        stones,
+        block,
+        ..
+    } = *shapes;
     let half = CLUTTER_MATS / 2;
     match kind {
+        ClutterKind::Bale => {
+            // round (1.5 m across, 1.2 m wide) lying on its side or on end, or square
+            // (2.4 x 1.2 x 0.9 m)
+            let u = rng.unit();
+            let (mesh, tf) = if u < 0.6 {
+                let tf = Transform::from_xyz(0.0, 0.72, 0.0)
+                    .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
+                    .with_scale(Vec3::new(1.5, 1.2, 1.5));
+                (shapes.cylinder, tf)
+            } else if u < 0.8 {
+                let tf = Transform::from_xyz(0.0, 0.6, 0.0).with_scale(Vec3::new(1.5, 1.2, 1.5));
+                (shapes.cylinder, tf)
+            } else {
+                let tf = Transform::from_xyz(0.0, 0.45, 0.0).with_scale(Vec3::new(2.4, 0.9, 1.2));
+                (shapes.block, tf)
+            };
+            vec![(mesh.clone(), tf, rng.index(CLUTTER_MATS))]
+        }
         ClutterKind::Bush => {
             // a clump of 1-4 lumpy blobs, each its own temperature: an irregular canopy
             (0..1 + rng.index(4))
@@ -1149,6 +1456,19 @@ type WaterOnly = (
     Without<Target>,
     Without<Clutter>,
 );
+/// The sun, kept apart from every other `Transform` query.
+type SunOnly = (
+    With<Sun>,
+    Without<AerialCamera>,
+    Without<Target>,
+    Without<Clutter>,
+    Without<WaterSurface>,
+);
+type CameraParts = (
+    &'static mut Transform,
+    &'static mut Projection,
+    &'static mut Msaa,
+);
 
 /// Everything a shot changes, for systems in both binaries.
 #[derive(SystemParam)]
@@ -1157,7 +1477,11 @@ pub struct SceneCtl<'w, 's> {
     images: ResMut<'w, Assets<Image>>,
     mats: ResMut<'w, Assets<StandardMaterial>>,
     handles: Res<'w, SceneHandles>,
-    camera: Query<'w, 's, (&'static mut Transform, &'static mut Projection), With<AerialCamera>>,
+    modality: Res<'w, Modality>,
+    world: Res<'w, World>,
+    sky: ResMut<'w, GlobalAmbientLight>,
+    camera: Query<'w, 's, CameraParts, With<AerialCamera>>,
+    sun: Query<'w, 's, (&'static mut Transform, &'static mut DirectionalLight), SunOnly>,
     targets: Query<'w, 's, Placed<Target>, Without<AerialCamera>>,
     clutter: Query<'w, 's, Placed<Clutter>, (Without<AerialCamera>, Without<Target>)>,
     water: Query<'w, 's, (&'static mut Transform, &'static mut Visibility), WaterOnly>,
@@ -1203,19 +1527,55 @@ impl SceneCtl<'_, '_> {
             .map(|(_, _, t)| t.kind.class_id())
     }
 
-    /// Move everything to `shot` and set every temperature.
+    /// Move everything to `shot` and set every temperature (or colour, for RGB).
     pub fn apply(&mut self, shot: &Shot) {
+        let (mut cam_tf, mut proj, _) = self.camera.single_mut().expect("one aerial camera");
+        *cam_tf = shot.camera;
+        if let Projection::Perspective(p) = &mut *proj {
+            p.fov = (shot.vfov_deg as f32).to_radians();
+        }
+        let mut places: Vec<_> = shot.clutter.iter().map(|v| v.iter()).collect();
+        for (mut tf, mut vis, c) in &mut self.clutter {
+            match places[c.kind as usize].next().and_then(|p| p.as_ref()) {
+                Some(p) => {
+                    *tf = *p;
+                    *vis = Visibility::Inherited;
+                }
+                None => *vis = Visibility::Hidden,
+            }
+        }
+        for (mut tf, mut vis, target) in &mut self.targets {
+            match &shot.targets[target.id as usize - 1] {
+                Some(p) => {
+                    *tf = p.transform;
+                    *vis = Visibility::Inherited;
+                    let shown = variant_index(p, target.variants.len());
+                    for (v, &e) in target.variants.iter().enumerate() {
+                        if let Ok(mut vv) = self.variants.get_mut(e) {
+                            *vv = if v == shown {
+                                Visibility::Inherited
+                            } else {
+                                Visibility::Hidden
+                            };
+                        }
+                    }
+                }
+                None => *vis = Visibility::Hidden,
+            }
+        }
+        match &shot.rgb {
+            None => self.apply_temperatures(shot),
+            Some(look) => self.apply_colours(look),
+        }
+    }
+
+    /// Thermal: every material's grey is its temperature in the shot's window.
+    fn apply_temperatures(&mut self, shot: &Shot) {
         let w = shot.window;
         let grey = |t: f64| {
             let v = w.linear(t);
             Color::linear_rgb(v, v, v)
         };
-        let (mut cam_tf, mut proj) = self.camera.single_mut().expect("one aerial camera");
-        *cam_tf = shot.camera;
-        if let Projection::Perspective(p) = &mut *proj {
-            p.fov = (shot.vfov_deg as f32).to_radians();
-        }
-
         let colors: Vec<[f32; 4]> = shot
             .ground_c
             .iter()
@@ -1272,51 +1632,103 @@ impl SceneCtl<'_, '_> {
                 }
             }
         }
-        let mut places: Vec<_> = shot.clutter.iter().map(|v| v.iter()).collect();
-        for (mut tf, mut vis, c) in &mut self.clutter {
-            match places[c.kind as usize].next().and_then(|p| p.as_ref()) {
-                Some(p) => {
-                    *tf = *p;
-                    *vis = Visibility::Inherited;
+        for (_, _, target) in &self.targets {
+            let Some(p) = &shot.targets[target.id as usize - 1] else {
+                continue;
+            };
+            for (h, &t) in target.picture.iter().zip(&p.temp_c) {
+                if let Some(mut m) = self.mats.get_mut(h) {
+                    m.base_color = grey(t);
                 }
-                None => *vis = Visibility::Hidden,
-            }
-        }
-
-        for (mut tf, mut vis, target) in &mut self.targets {
-            match &shot.targets[target.id as usize - 1] {
-                Some(p) => {
-                    *tf = p.transform;
-                    *vis = Visibility::Inherited;
-                    let shown = variant_index(p, target.variants.len());
-                    for (v, &e) in target.variants.iter().enumerate() {
-                        if let Ok(mut vv) = self.variants.get_mut(e) {
-                            *vv = if v == shown {
-                                Visibility::Inherited
-                            } else {
-                                Visibility::Hidden
-                            };
-                        }
-                    }
-                    for (h, &t) in target.thermal.iter().zip(&p.temp_c) {
-                        if let Some(mut m) = self.mats.get_mut(h) {
-                            m.base_color = grey(t);
-                        }
-                    }
-                }
-                None => *vis = Visibility::Hidden,
             }
         }
     }
 
-    /// Switch every mesh to its id look (`true`) or its thermal look.
+    /// RGB: albedos (`rgb.rs`) under the shot's sun and sky.
+    fn apply_colours(&mut self, look: &RgbLook) {
+        let lin = |c: rgb::Rgb| Color::linear_rgb(c[0], c[1], c[2]);
+        let d = &look.daylight;
+        if let Ok((mut tf, mut sun)) = self.sun.single_mut() {
+            let dir = Vec3::new(
+                d.sun_dir[0] as f32,
+                d.sun_dir[1] as f32,
+                d.sun_dir[2] as f32,
+            );
+            *tf = Transform::from_translation(dir).looking_at(Vec3::ZERO, Vec3::Y);
+            sun.illuminance = SUN_LUX * d.sun;
+            sun.color = lin(d.sun_tint);
+        }
+        self.sky.color = lin(d.sky_tint);
+        self.sky.brightness = SKY_NITS * d.sky;
+
+        let colors: Vec<[f32; 4]> = self
+            .world
+            .vertices
+            .iter()
+            .map(|p| {
+                let c = look.ground.at(p[0], p[2]);
+                [c[0], c[1], c[2], 1.0]
+            })
+            .collect();
+        if let Some(mut mesh) = self.meshes.get_mut(&self.handles.terrain_mesh) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        }
+        if let Some(mut img) = self.images.get_mut(&self.handles.texture) {
+            img.data = Some(rgb::ground_texture(&look.ground, TEX_SIZE));
+        }
+        let (_, mut water_vis) = self.water.single_mut().expect("one water surface");
+        *water_vis = Visibility::Hidden;
+        if let Some(mut m) = self.mats.get_mut(&self.handles.roads) {
+            m.base_color = lin(look.road);
+        }
+        for ((set, colours), &(kind, _)) in self
+            .handles
+            .clutter
+            .iter()
+            .zip(&look.clutter)
+            .zip(RGB_CLUTTER.iter())
+        {
+            // canopies carry the foliage texture, so they make up for its base
+            let gain = if kind == ClutterKind::Bush {
+                texture_gain()
+            } else {
+                1.0
+            };
+            for (h, &c) in set.iter().zip(colours) {
+                if let Some(mut m) = self.mats.get_mut(h) {
+                    m.base_color = lin(c.map(|v| v * gain));
+                }
+            }
+        }
+        for (_, _, target) in &self.targets {
+            let Some(coat) = &look.coats[target.id as usize - 1] else {
+                continue;
+            };
+            // baked models have no texture coordinates, so patches are for primitives
+            let patched = coat.patches && target.bodies[0] == "primitive";
+            let patch = &self.handles.patches[target.id as usize % PATCH_TEXTURES];
+            for (k, (h, &c)) in target.picture.iter().zip(&coat.parts).enumerate() {
+                if let Some(mut m) = self.mats.get_mut(h) {
+                    m.base_color = lin(c);
+                    m.base_color_texture = (patched && k == TORSO).then(|| patch.clone());
+                }
+            }
+        }
+    }
+
+    /// Switch every mesh to its id look (`true`) or its picture look. RGB pictures are
+    /// drawn with MSAA, the id look never (its colours must stay exact).
     pub fn show_ids(&mut self, ids: bool) {
         for (look, mut mat) in &mut self.looks {
             mat.0 = if ids {
                 look.id.clone()
             } else {
-                look.thermal.clone()
+                look.picture.clone()
             };
+        }
+        if *self.modality == Modality::Rgb {
+            let (_, _, mut msaa) = self.camera.single_mut().expect("one aerial camera");
+            *msaa = if ids { Msaa::Off } else { Msaa::Sample4 };
         }
     }
 }
@@ -1401,7 +1813,7 @@ mod tests {
         let mut rng = Rng::new(2);
         let mut empty = 0;
         for _ in 0..40 {
-            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.0);
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.0, Modality::Thermal);
             assert!((60.0..130.0).contains(&s.altitude_m));
             assert!(s.pitch_deg - s.vfov_deg / 2.0 >= 5.0);
             assert_eq!(s.targets.len(), kinds.len());
@@ -1423,8 +1835,8 @@ mod tests {
         let posed: Vec<bool> = kinds.iter().map(|&k| k == Kind::Person).collect();
         let (mut a, mut b) = (Rng::new(3), Rng::new(3));
         for _ in 0..20 {
-            let s = Shot::random(&mut a, &world, &kinds, &[], 0.0);
-            let t = Shot::random(&mut b, &world, &kinds, &posed, 0.0);
+            let s = Shot::random(&mut a, &world, &kinds, &[], 0.0, Modality::Thermal);
+            let t = Shot::random(&mut b, &world, &kinds, &posed, 0.0, Modality::Thermal);
             assert_eq!(s.camera, t.camera);
             for ((p, q), &kind) in s.targets.iter().zip(&t.targets).zip(&kinds) {
                 let (Some(p), Some(q)) = (p, q) else {
@@ -1469,7 +1881,7 @@ mod tests {
         let mut rng = Rng::new(5);
         let (mut faint, mut with_targets) = (0, 0);
         for _ in 0..80 {
-            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.4);
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.4, Modality::Thermal);
             if s.n_targets() == 0 {
                 assert!(!s.faint);
                 continue;
@@ -1497,6 +1909,36 @@ mod tests {
 
     #[test]
     fn pool_fits_the_id_render() {
-        assert!(pool().len() * (ID_STEP as usize) <= 255);
+        assert_eq!(pool(), Modality::Thermal.kinds());
+        for m in [Modality::Thermal, Modality::Rgb] {
+            assert!(m.kinds().len() * (ID_STEP as usize) <= 255);
+        }
+    }
+
+    #[test]
+    fn rgb_shots_look_down_in_colour_with_bales_on_stubble() {
+        let world = World::new(1);
+        let kinds = Modality::Rgb.kinds();
+        let mut rng = Rng::new(6);
+        let bale = ClutterKind::Bale as usize;
+        let (mut nadir, mut bales_off_stubble, mut empty) = (0, 0, 0);
+        for _ in 0..60 {
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.4, Modality::Rgb);
+            let look = s.rgb.as_ref().expect("RGB shots carry colours");
+            assert!((60.0..150.0).contains(&s.altitude_m));
+            assert!(s.conditions.water.is_none() && !s.faint);
+            nadir += (s.pitch_deg == 90.0) as usize;
+            empty += (s.n_targets() == 0) as usize;
+            for (p, c) in s.targets.iter().zip(&look.coats) {
+                assert_eq!(p.is_some(), c.is_some());
+            }
+            if look.ground.field != rgb::Field::Stubble {
+                bales_off_stubble += s.clutter[bale].iter().flatten().count();
+            }
+            assert_eq!(look.clutter.len(), s.clutter.len());
+        }
+        assert!((36..60).contains(&nadir), "{nadir} nadir of 60");
+        assert!((6..=36).contains(&empty), "{empty} empty of 60");
+        assert_eq!(bales_off_stubble, 0);
     }
 }

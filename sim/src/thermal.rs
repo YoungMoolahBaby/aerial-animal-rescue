@@ -256,7 +256,7 @@ pub fn ground_texture(seed: u64, size: usize, amount: f64, speckle: f64) -> Vec<
 }
 
 /// Value-noise fbm over the unit square that wraps at its edges.
-fn tiling_fbm(seed: u64, u: f64, v: f64, cells: f64) -> f64 {
+pub(crate) fn tiling_fbm(seed: u64, u: f64, v: f64, cells: f64) -> f64 {
     let (mut sum, mut amp, mut norm, mut period) = (0.0, 1.0, 0.0, cells);
     for o in 0..4u64 {
         sum += amp

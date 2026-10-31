@@ -3,15 +3,18 @@
 //!
 //!     cargo run --release --bin datagen -- --out ../data/interim/sim_phase1 --frames 20 --seed 0
 //!
+//! `--modality rgb` renders daylight colour photos (1280x960, farm pool, `rgb.rs`) instead
+//! of thermal frames (the default).
 //! `--faint-share 0.4` makes the bodies faint in that share of shots (v7; default 0).
 //! `--bodies assets/bodies` builds the kinds that have baked models (`scripts/bake_bodies.py`)
 //! from them instead of primitives; for a seed the shots are the same either way.
 //!
 //! A window opens while it renders (Bevy's screenshot path needs one) and closes when done.
-//! Each shot is captured twice: the thermal look, then the id look (`scene.rs`), each after
-//! a few frames so the picture matches the scene. The thermal frame goes through the
-//! sensor model and is saved as JPEG; the id frame gives the boxes. `sim_params.csv` next
-//! to `metadata.csv` records each image's conditions and camera settings for analysis.
+//! Each shot is captured twice: the picture (thermal or RGB), then the id look
+//! (`scene.rs`), each after a few frames so the picture matches the scene. The picture
+//! goes through its camera model and is saved as JPEG; the id frame gives the boxes.
+//! `sim_params.csv` next to `metadata.csv` records each image's conditions and camera
+//! settings for analysis.
 //!
 //! Bevy compiles shaders during the first frames and draws nothing until then, so capture
 //! starts after a warm-up that shows both looks, and a uniform capture is thrown away and
@@ -25,8 +28,11 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use image::codecs::jpeg::JpegEncoder;
 use storm_sim::capture::{PixelBox, PoolWriter, Record, boxes_from_id_mask, id_mask_from_rgb};
+use storm_sim::rgb::{self, RgbParams};
 use storm_sim::rng::Rng;
-use storm_sim::scene::{self, BodyModels, ID_STEP, IMAGE_H, IMAGE_W, POOL, SceneCtl, Shot, World};
+use storm_sim::scene::{
+    self, BodyModels, ID_STEP, IMAGE_H, IMAGE_W, Modality, SceneCtl, Shot, World,
+};
 use storm_sim::sensor::{self, SensorParams};
 
 const SETTLE_FRAMES: u32 = 4;
@@ -36,6 +42,12 @@ const MAX_BLANK: usize = 20;
 const MIN_PIXELS: usize = 6;
 /// Pixels added on every side of a box beyond the blur (see `write_shot`).
 const LABEL_MARGIN: f32 = 2.0;
+/// The real RGB cow boxes hug the animal (sharp 5 K photos), so one pixel at 1280.
+const RGB_LABEL_MARGIN: f32 = 1.0;
+const THERMAL_PARAMS: &str = "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
+    targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n";
+const RGB_PARAMS: &str = "image_id,field,sun,sky,sun_elev_deg,vfov_deg,altitude_m,pitch_deg,targets,boxes,\
+    bales,wb_r,wb_b,median,vignette,circle,blur,haze,contrast,saturation,noise,jpeg,bodies\n";
 
 type Slot = Arc<Mutex<Option<Image>>>;
 
@@ -49,7 +61,7 @@ enum Phase {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Capture {
-    Thermal,
+    Picture,
     Ids,
 }
 
@@ -57,6 +69,7 @@ enum Capture {
 struct Datagen {
     frames: usize,
     faint_share: f64,
+    modality: Modality,
     rng: Rng,
     writer: Option<PoolWriter>,
     params: String,
@@ -64,7 +77,8 @@ struct Datagen {
     index: usize,
     phase: Phase,
     shot: Option<Shot>,
-    thermal: Option<Vec<u8>>,
+    /// The captured picture: grey for thermal, RGB (3 bytes a pixel) for RGB.
+    picture: Option<Vec<u8>>,
     slot: Slot,
 }
 
@@ -81,6 +95,9 @@ fn main() {
     let seed: u64 = get("--seed").map_or(0, |v| v.parse().expect("--seed is a number"));
     let faint_share: f64 =
         get("--faint-share").map_or(0.0, |v| v.parse().expect("--faint-share is a number"));
+    let modality = get("--modality").map_or(Modality::Thermal, |m| {
+        Modality::parse(&m).expect("--modality is thermal or rgb")
+    });
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
     let only: Vec<String> = get("--body-kinds")
         .map(|k| k.split(',').map(str::to_string).collect())
@@ -92,23 +109,25 @@ fn main() {
     println!("body models: {}", models.summary());
 
     App::new()
-        .add_plugins(DefaultPlugins.set(scene::window_plugin("storm sim: datagen")))
+        .add_plugins(DefaultPlugins.set(scene::window_plugin("storm sim: datagen", modality)))
         .insert_resource(World::new(seed))
         .insert_resource(models)
+        .insert_resource(modality)
         .insert_resource(Datagen {
             frames,
             faint_share,
+            modality,
             rng: Rng::new(seed),
             writer: Some(writer),
-            params: String::from(
-                "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
-                 targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n",
-            ),
+            params: String::from(match modality {
+                Modality::Thermal => THERMAL_PARAMS,
+                Modality::Rgb => RGB_PARAMS,
+            }),
             blank: 0,
             index: 0,
             phase: Phase::Warmup(WARMUP_FRAMES),
             shot: None,
-            thermal: None,
+            picture: None,
             slot: Arc::new(Mutex::new(None)),
         })
         .add_systems(Startup, setup)
@@ -123,19 +142,17 @@ fn setup(
     mut mats: ResMut<Assets<StandardMaterial>>,
     world: Res<World>,
     models: Res<BodyModels>,
+    modality: Res<Modality>,
 ) {
-    let kinds: Vec<_> = POOL
-        .iter()
-        .flat_map(|&(k, n)| std::iter::repeat_n(k, n))
-        .collect();
     scene::spawn_scene(
         &mut commands,
         &mut meshes,
         &mut images,
         &mut mats,
         &world,
-        &kinds,
+        &modality.kinds(),
         &models,
+        *modality,
     );
 }
 
@@ -176,11 +193,11 @@ fn drive(
         }
         Phase::Place => {
             let kinds = ctl.kinds();
-            let share = dg.faint_share;
-            let shot = Shot::random(&mut dg.rng, &world, &kinds, &ctl.posed(), share);
+            let (share, modality) = (dg.faint_share, dg.modality);
+            let shot = Shot::random(&mut dg.rng, &world, &kinds, &ctl.posed(), share, modality);
             ctl.apply(&shot);
             dg.shot = Some(shot);
-            dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Thermal);
+            dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Picture);
         }
         Phase::Settle(0, what) => {
             let slot = dg.slot.clone();
@@ -201,15 +218,16 @@ fn drive(
                 .expect("screenshot to image")
                 .to_rgb8();
             // Boxes are in window pixels; the window is the sensor size (scale factor 1).
+            let (width, height) = dg.modality.size();
             assert_eq!(
                 (rgb.width(), rgb.height()),
-                (IMAGE_W, IMAGE_H),
+                (width, height),
                 "window is not the sensor size"
             );
             let raw = rgb.as_raw();
-            // A thermal frame is never uniform; an id frame always has some green.
+            // A picture is never uniform; an id frame always has some green.
             let blank = match what {
-                Capture::Thermal => raw.iter().all(|&p| p == raw[0]),
+                Capture::Picture => raw.iter().all(|&p| p == raw[0]),
                 Capture::Ids => raw.iter().all(|&p| p == 0),
             };
             if blank {
@@ -220,8 +238,11 @@ fn drive(
                 return;
             }
             match what {
-                Capture::Thermal => {
-                    dg.thermal = Some(raw.chunks_exact(3).map(|p| p[0]).collect());
+                Capture::Picture => {
+                    dg.picture = Some(match dg.modality {
+                        Modality::Thermal => raw.chunks_exact(3).map(|p| p[0]).collect(),
+                        Modality::Rgb => raw.clone(),
+                    });
                     ctl.show_ids(true);
                     dg.phase = Phase::Settle(SETTLE_FRAMES, Capture::Ids);
                 }
@@ -232,14 +253,21 @@ fn drive(
                         let dir = dir.parent().unwrap().with_file_name("debug");
                         std::fs::create_dir_all(&dir).unwrap();
                         rgb.save(dir.join(format!("{}_id.png", dg.index))).unwrap();
-                        image::GrayImage::from_raw(IMAGE_W, IMAGE_H, dg.thermal.clone().unwrap())
-                            .unwrap()
-                            .save(dir.join(format!("{}_raw.png", dg.index)))
-                            .unwrap();
+                        let picture = dg.picture.clone().unwrap();
+                        let path = dir.join(format!("{}_raw.png", dg.index));
+                        match dg.modality {
+                            Modality::Thermal => image::GrayImage::from_raw(width, height, picture)
+                                .unwrap()
+                                .save(path),
+                            Modality::Rgb => image::RgbImage::from_raw(width, height, picture)
+                                .unwrap()
+                                .save(path),
+                        }
+                        .unwrap();
                     }
                     let mask = id_mask_from_rgb(raw, ID_STEP);
                     let boxes: Vec<PixelBox> =
-                        boxes_from_id_mask(&mask, IMAGE_W as usize, MIN_PIXELS)
+                        boxes_from_id_mask(&mask, width as usize, MIN_PIXELS)
                             .into_iter()
                             .filter_map(|(id, b, _)| {
                                 Some(PixelBox {
@@ -265,9 +293,26 @@ fn drive(
     }
 }
 
+/// Boxes grown by `pad` pixels on every side, clipped to the frame.
+fn padded(boxes: &[PixelBox], pad: f32, width: u32, height: u32) -> Vec<PixelBox> {
+    boxes
+        .iter()
+        .map(|b| PixelBox {
+            x1: (b.x1 - pad).max(0.0),
+            y1: (b.y1 - pad).max(0.0),
+            x2: (b.x2 + pad).min(width as f32),
+            y2: (b.y2 + pad).min(height as f32),
+            ..*b
+        })
+        .collect()
+}
+
 fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
+    if dg.modality == Modality::Rgb {
+        return write_rgb_shot(dg, world, boxes, bodies);
+    }
     let shot = dg.shot.take().expect("a shot was placed");
-    let raw = dg.thermal.take().expect("thermal frame captured");
+    let raw = dg.picture.take().expect("thermal frame captured");
     // weather from its own stream, so the shots stay as in older pools
     let mut weather = Rng::new(world.seed.wrapping_mul(0x9E37_79B9) ^ (dg.index as u64) << 20);
     let p = SensorParams::random(&mut dg.rng).with_weather(&mut weather);
@@ -277,17 +322,7 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
     // labellers leave a margin round the visible blob, which the optics blur already
     // widens by about sigma per side.
     let pad = p.blur_sigma.round() + LABEL_MARGIN;
-    let boxes: Vec<PixelBox> = boxes
-        .iter()
-        .map(|b| PixelBox {
-            x1: (b.x1 - pad).max(0.0),
-            y1: (b.y1 - pad).max(0.0),
-            x2: (b.x2 + pad).min(IMAGE_W as f32),
-            y2: (b.y2 + pad).min(IMAGE_H as f32),
-            ..*b
-        })
-        .collect();
-    let boxes = &boxes[..];
+    let boxes = &padded(boxes, pad, IMAGE_W, IMAGE_H)[..];
     let image_id = format!("sim_w{}_{:06}", world.seed, dg.index);
     dg.index += 1;
     let c = &shot.conditions;
@@ -337,6 +372,67 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         bodies,
         p.haze,
         shot.faint,
+    )
+    .unwrap();
+}
+
+fn write_rgb_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
+    let (width, height) = Modality::Rgb.size();
+    let shot = dg.shot.take().expect("a shot was placed");
+    let raw = dg.picture.take().expect("RGB frame captured");
+    let look = shot.rgb.as_ref().expect("an RGB shot");
+    let p = RgbParams::random(&mut dg.rng);
+    let out = rgb::apply(&raw, width as usize, height as usize, &p, &mut dg.rng);
+    let pad = p.blur_sigma.round() + RGB_LABEL_MARGIN;
+    let boxes = &padded(boxes, pad, width, height)[..];
+    let image_id = format!("sim_rgb_w{}_{:06}", world.seed, dg.index);
+    dg.index += 1;
+    let record = Record {
+        // procedural world and bodies (CC0 models if --bodies: sim/bodies.csv)
+        source_license: "CC-BY-4.0".into(),
+        modality: "rgb".into(),
+        altitude_m: Some(shot.altitude_m),
+        weather: "clear".into(),
+        scene_type: "pasture".into(),
+        sequence_id: format!("sim-rgb-world-{}", world.seed),
+    };
+    let w = dg.writer.as_mut().expect("writer open");
+    let file = std::fs::File::create(w.image_path(&image_id, "jpg")).expect("create image");
+    JpegEncoder::new_with_quality(std::io::BufWriter::new(file), p.jpeg_quality)
+        .encode(&out, width, height, image::ExtendedColorType::Rgb8)
+        .expect("encode JPEG");
+    w.add(&image_id, "jpg", width, height, boxes, &record)
+        .expect("write label");
+    let d = &look.daylight;
+    let bales = shot
+        .clutter
+        .last()
+        .map_or(0, |b| b.iter().flatten().count());
+    writeln!(
+        dg.params,
+        "{image_id},{},{:.2},{:.2},{:.0},{:.1},{:.1},{:.1},{},{},{},{:.3},{:.3},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{}",
+        look.ground.field.name(),
+        d.sun,
+        d.sky,
+        d.sun_dir[1].asin().to_degrees(),
+        shot.vfov_deg,
+        shot.altitude_m,
+        shot.pitch_deg,
+        shot.n_targets(),
+        boxes.len(),
+        bales,
+        p.wb[0],
+        p.wb[2],
+        p.median,
+        p.vignette,
+        p.circle,
+        p.blur_sigma,
+        p.haze,
+        p.contrast,
+        p.saturation,
+        p.noise,
+        p.jpeg_quality,
+        bodies,
     )
     .unwrap();
 }
