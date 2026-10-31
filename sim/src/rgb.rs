@@ -11,6 +11,8 @@
 //! does what a drone camera does: white balance, auto-exposure, vignetting, a little blur
 //! and noise, contrast and saturation, and JPEG when the frame is saved.
 
+pub use crate::fields::Field;
+use crate::fields::Layout;
 use crate::rng::Rng;
 use crate::scene::Kind;
 use crate::sensor::{blur, percentile};
@@ -26,13 +28,13 @@ pub fn albedo(r: u8, g: u8, b: u8) -> Rgb {
 
 /// `c` a shade lighter or darker (up to +-`spread`, log), its hue nudged by a third of
 /// that per channel.
-fn vary(rng: &mut Rng, c: Rgb, spread: f64) -> Rgb {
+pub(crate) fn vary(rng: &mut Rng, c: Rgb, spread: f64) -> Rgb {
     let all = rng.range(-spread, spread).exp() as f32;
     let hue = [(); 3].map(|_| rng.range(-spread / 3.0, spread / 3.0).exp() as f32);
     [0, 1, 2].map(|k| (c[k] * all * hue[k]).min(0.95))
 }
 
-fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
+pub(crate) fn mix(a: Rgb, b: Rgb, t: f32) -> Rgb {
     [0, 1, 2].map(|k| a[k] + (b[k] - a[k]) * t)
 }
 
@@ -77,28 +79,11 @@ impl Daylight {
     }
 }
 
-/// What the ground is: grazed pasture, dry summer grass, or a harvested field (stubble in
-/// stripes, often with bales lying on it, like ICAERUS flight 032).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Field {
-    Pasture,
-    Dry,
-    Stubble,
-}
-
-impl Field {
-    pub fn name(self) -> &'static str {
-        match self {
-            Field::Pasture => "pasture",
-            Field::Dry => "dry",
-            Field::Stubble => "stubble",
-        }
-    }
-}
-
-/// Colours of the ground for one shot.
+/// The ground of one shot: the farm layout under the camera (`fields.rs`, painted into
+/// the ground image), and the colours of its central field for the terrain beyond it.
 #[derive(Clone, Debug)]
 pub struct Ground {
+    /// The field the camera looks at (its centre).
     pub field: Field,
     /// Main cover, patches of a second cover, and bare soil (tracks, gateways, molehills).
     pub main: Rgb,
@@ -115,53 +100,26 @@ pub struct Ground {
     pub tufts: f64,
     pub grain: f64,
     pub seed: u64,
+    pub layout: Layout,
 }
 
 impl Ground {
-    pub fn random(rng: &mut Rng) -> Self {
-        let u = rng.unit();
-        let field = if u < 0.55 {
-            Field::Pasture
-        } else if u < 0.8 {
-            Field::Dry
-        } else {
-            Field::Stubble
-        };
-        let soil = vary(rng, albedo(125, 100, 75), 0.3);
-        let (main, second) = match field {
-            Field::Pasture => (
-                vary(rng, albedo(110, 135, 60), 0.25),
-                if rng.chance(0.5) {
-                    vary(rng, albedo(150, 145, 95), 0.2) // paler, drier patches
-                } else {
-                    vary(rng, albedo(75, 105, 45), 0.2) // lush dark patches
-                },
-            ),
-            Field::Dry => (
-                vary(rng, albedo(165, 150, 105), 0.2),
-                vary(rng, albedo(115, 125, 70), 0.2),
-            ),
-            Field::Stubble => (
-                vary(rng, albedo(200, 175, 120), 0.15),
-                vary(rng, albedo(150, 130, 90), 0.2),
-            ),
-        };
-        let stripes = match field {
-            Field::Stubble => rng.range(0.05, 0.15),
-            Field::Pasture if rng.chance(0.2) => rng.range(0.03, 0.1), // mown
-            _ => 0.0,
-        };
+    /// The ground for a camera footprint: a square `size` metres across around `centre`.
+    pub fn random(rng: &mut Rng, centre: [f64; 2], size: f64) -> Self {
+        let layout = Layout::random(rng, centre, size);
+        let p = layout.parcel_at(centre[0], centre[1]).clone();
         Self {
-            field,
-            main,
-            second,
-            soil,
-            stripes,
+            field: p.field,
+            main: p.main,
+            second: p.second,
+            soil: p.soil,
+            stripes: p.mow,
             stripes_per_tile: 4 + rng.index(9),
-            texture: rng.range(0.1, 0.35),
+            texture: p.texture,
             tufts: rng.range(0.2, 1.0),
-            grain: rng.range(0.1, 0.25),
+            grain: p.grain,
             seed: rng.next_u64(),
+            layout,
         }
     }
 
@@ -212,8 +170,8 @@ pub fn ground_texture(g: &Ground, size: usize) -> Vec<u8> {
     }
     let lush = match g.field {
         Field::Pasture => 0.5,
-        Field::Dry => 0.3,
-        Field::Stubble => 0.08,
+        Field::Dry | Field::Crop => 0.3,
+        Field::Stubble | Field::Bare => 0.08,
     };
     let mut rng = Rng::new(g.seed ^ 0x7AF7);
     for _ in 0..size * size / 400 {
@@ -263,7 +221,7 @@ pub struct Coat {
 }
 
 /// Pick from `(weight, value)` pairs.
-fn pick<T: Copy>(rng: &mut Rng, items: &[(f64, T)]) -> T {
+pub(crate) fn pick<T: Copy>(rng: &mut Rng, items: &[(f64, T)]) -> T {
     let total: f64 = items.iter().map(|i| i.0).sum();
     let mut u = rng.range(0.0, total);
     for &(w, v) in items {
@@ -509,7 +467,7 @@ impl RgbParams {
                 0.0
             },
             // 5 K stills scaled to 1280 are sharp
-            blur_sigma: rng.range(0.2f64.ln(), 0.6f64.ln()).exp() as f32,
+            blur_sigma: rng.range(0.15f64.ln(), 0.45f64.ln()).exp() as f32,
             haze: if rng.chance(0.1) {
                 rng.range(0.02, 0.08) as f32
             } else {
@@ -523,7 +481,7 @@ impl RgbParams {
     }
 }
 
-fn linear_to_srgb(v: f32) -> f32 {
+pub(crate) fn linear_to_srgb(v: f32) -> f32 {
     if v <= 0.003_130_8 {
         v * 12.92
     } else {
@@ -637,7 +595,7 @@ mod tests {
     #[test]
     fn ground_texture_tiles_and_varies() {
         let mut rng = Rng::new(3);
-        let mut g = Ground::random(&mut rng);
+        let mut g = Ground::random(&mut rng, [0.0, 0.0], 200.0);
         g.stripes = 0.2;
         let size = 64;
         let t = ground_texture(&g, size);

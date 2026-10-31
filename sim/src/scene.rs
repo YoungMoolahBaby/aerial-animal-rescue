@@ -24,13 +24,16 @@ use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::ecs::system::SystemParam;
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-use bevy::light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight};
+use bevy::light::{
+    CascadeShadowConfigBuilder, DirectionalLightShadowMap, GlobalAmbientLight, NotShadowCaster,
+};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::Msaa;
 
 use crate::bodies::{self, Model};
+use crate::fields::{Layout, NoiseTable, OVERLAY_TEX};
 use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
@@ -106,6 +109,14 @@ impl Modality {
             Self::Rgb => &RGB_CLUTTER,
         }
     }
+
+    /// Where `kind` is in `clutter()` (and so in a shot's per-kind lists).
+    fn clutter_index(self, kind: ClutterKind) -> usize {
+        self.clutter()
+            .iter()
+            .position(|c| c.0 == kind)
+            .expect("a clutter kind of this modality")
+    }
 }
 /// Red step between target ids in the id render.
 pub const ID_STEP: u8 = 8;
@@ -129,6 +140,10 @@ pub enum ClutterKind {
     /// Round bales (lying or on end) and square ones, on harvested fields (RGB only): the
     /// real RGB model's false alarms come from such a field (ICAERUS flight 032).
     Bale,
+    /// Cars, pickups, vans and tractors (RGB only; thermal keeps `Car`), often on a track.
+    Vehicle,
+    /// Hedge segments along hedged field edges (RGB only).
+    Hedge,
 }
 
 /// Kinds and how many of each the scene holds (in `ClutterKind` order).
@@ -138,13 +153,17 @@ const CLUTTER: [(ClutterKind, usize); 4] = [
     (ClutterKind::House, 8),
     (ClutterKind::Car, 10),
 ];
-const RGB_CLUTTER: [(ClutterKind, usize); 5] = [
+/// RGB: fewer vehicles than thermal's cars (the plain boxes were the real model's top
+/// alarms on sim frames), and hedges.
+const RGB_CLUTTER: [(ClutterKind, usize); 6] = [
     (ClutterKind::Bush, 60),
     (ClutterKind::Rock, 10),
     (ClutterKind::House, 8),
-    (ClutterKind::Car, 10),
+    (ClutterKind::Vehicle, 6),
     (ClutterKind::Bale, 40),
+    (ClutterKind::Hedge, RGB_HEDGES),
 ];
+const RGB_HEDGES: usize = 160;
 
 /// What the pool of bodies holds; datagen picks from it per shot.
 pub const POOL: [(Kind, usize); 10] = [
@@ -407,6 +426,9 @@ pub struct SceneHandles {
     clutter: Vec<Vec<Handle<StandardMaterial>>>,
     /// Black patches on white for piebald coats (RGB).
     patches: Vec<Handle<Image>>,
+    /// RGB: the painted ground's mesh and image, and the noise it's painted from.
+    overlay: Option<(Handle<Mesh>, Handle<Image>)>,
+    table: Option<NoiseTable>,
 }
 
 /// The colours of an RGB shot (`rgb.rs`).
@@ -564,10 +586,14 @@ impl Shot {
             })
             .collect();
 
-        let ground = (!thermal).then(|| Ground::random(rng));
-        let stubble = ground
-            .as_ref()
-            .is_some_and(|g| g.field == rgb::Field::Stubble);
+        let ground = (!thermal).then(|| {
+            let (centre, size) = footprint(&camera, vfov_deg, aim[1]);
+            Ground::random(rng, centre, size)
+        });
+        let layout = ground.as_ref().map(|g| &g.layout);
+        let stubble =
+            layout.is_some_and(|l| l.parcels.iter().any(|p| p.field == rgb::Field::Stubble));
+        let hedges = layout.map_or_else(Vec::new, |l| l.hedge_segments(rng, RGB_HEDGES));
         let mut clutter = Vec::new();
         let mut clutter_c = Vec::new();
         for &(kind, max) in modality.clutter() {
@@ -578,11 +604,21 @@ impl Shot {
                 ClutterKind::House => rng.chance(0.35) as usize * (1 + rng.index(max)),
                 ClutterKind::Car => rng.chance(0.4) as usize * (1 + rng.index(max)),
                 ClutterKind::Bale => (stubble && rng.chance(0.7)) as usize * (1 + rng.index(max)),
+                ClutterKind::Vehicle => rng.chance(0.3) as usize * (1 + rng.index(max)),
+                ClutterKind::Hedge => hedges.len().min(max),
             };
             let placed: Vec<Option<Transform>> = (0..max)
                 .map(|i| {
                     if i >= n {
                         return None;
+                    }
+                    match kind {
+                        ClutterKind::Hedge => return Some(hedge(rng, terrain, hedges[i])),
+                        ClutterKind::Vehicle => {
+                            return Some(vehicle(rng, terrain, layout, &near, spread));
+                        }
+                        ClutterKind::Bale => return bale(rng, terrain, layout?, &near, spread),
+                        _ => {}
                     }
                     let (x, z) = near(rng, 1.5 * spread);
                     let yaw = Quat::from_rotation_y(rng.range(0.0, std::f64::consts::TAU) as f32);
@@ -641,18 +677,21 @@ impl Shot {
                             )
                         }
                         ClutterKind::Car => at(ground + 0.7, Vec3::new(1.8, 1.5, 4.5)),
-                        // the parts carry the size (`clutter_parts`)
-                        ClutterKind::Bale => at(ground, Vec3::splat(rng.range(0.9, 1.1) as f32)),
+                        ClutterKind::Bale | ClutterKind::Vehicle | ClutterKind::Hedge => {
+                            unreachable!("placed above")
+                        }
                     }
                 })
                 .collect();
             let temps: Vec<f64> = (0..CLUTTER_MATS)
                 .map(|i| match kind {
-                    ClutterKind::Bush => conditions.vegetation_c(rng),
+                    ClutterKind::Bush | ClutterKind::Hedge => conditions.vegetation_c(rng),
                     ClutterKind::Rock | ClutterKind::Bale => conditions.clutter_c(rng),
                     ClutterKind::House => conditions.building_c(rng),
-                    ClutterKind::Car if i < CLUTTER_MATS / 2 => conditions.vehicle_c(rng),
-                    ClutterKind::Car => conditions.glass_c(rng),
+                    ClutterKind::Car | ClutterKind::Vehicle if i < CLUTTER_MATS / 2 => {
+                        conditions.vehicle_c(rng)
+                    }
+                    ClutterKind::Car | ClutterKind::Vehicle => conditions.glass_c(rng),
                 })
                 .collect();
             clutter.push(placed);
@@ -705,11 +744,13 @@ impl Shot {
                 .map(|&(kind, _)| {
                     (0..CLUTTER_MATS)
                         .map(|i| match kind {
-                            ClutterKind::Bush => rgb::canopy(rng),
+                            ClutterKind::Bush | ClutterKind::Hedge => rgb::canopy(rng),
                             ClutterKind::Rock => rgb::stone(rng),
                             ClutterKind::House => rgb::building(rng),
-                            ClutterKind::Car if i < CLUTTER_MATS / 2 => rgb::car(rng),
-                            ClutterKind::Car => rgb::glass(rng),
+                            ClutterKind::Car | ClutterKind::Vehicle if i < CLUTTER_MATS / 2 => {
+                                rgb::car(rng)
+                            }
+                            ClutterKind::Car | ClutterKind::Vehicle => rgb::glass(rng),
                             ClutterKind::Bale => rgb::bale(rng),
                         })
                         .collect()
@@ -741,6 +782,104 @@ impl Shot {
     pub fn n_targets(&self) -> usize {
         self.targets.iter().flatten().count()
     }
+}
+
+/// The ground the camera sees: a square (centre x, z and side, metres) around where the
+/// frame's corners meet the plane at `ground_y`, with a margin for the terrain's relief.
+fn footprint(camera: &Transform, vfov_deg: f64, ground_y: f64) -> ([f64; 2], f64) {
+    let tan_v = (vfov_deg / 2.0).to_radians().tan() as f32;
+    let tan_h = tan_v * RGB_W as f32 / RGB_H as f32;
+    let eye = camera.translation;
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+        let dir = camera.rotation * Vec3::new(sx * tan_h, sy * tan_v, -1.0);
+        // the top edge looks at least 40 deg down in RGB shots, so every ray hits
+        let t = (ground_y as f32 - eye.y) / dir.y.min(-1e-3);
+        let p = eye + dir * t;
+        for (k, v) in [p.x as f64, p.z as f64].into_iter().enumerate() {
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    let centre = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0];
+    let size = ((hi[0] - lo[0]).max(hi[1] - lo[1]) * 1.1 + 20.0).min(600.0);
+    (centre, size)
+}
+
+/// A hedge segment at (x, z) running along `a`: 4.5-6.5 m long, 1.5-3.5 m high.
+fn hedge(rng: &mut Rng, terrain: &Terrain, (x, z, a): (f64, f64, [f64; 2])) -> Transform {
+    let (len, h, w) = (
+        rng.range(4.5, 6.5),
+        rng.range(1.5, 3.5),
+        rng.range(1.5, 2.8),
+    );
+    // local x along the hedge
+    let yaw = (-a[1]).atan2(a[0]) as f32;
+    Transform::from_xyz(x as f32, (terrain.height(x, z) + h * 0.4) as f32, z as f32)
+        .with_rotation(Quat::from_rotation_y(yaw))
+        .with_scale(Vec3::new(len as f32, h as f32, w as f32))
+}
+
+/// A vehicle: parked on a track, along it, 60% of the time if there is one; else anywhere
+/// near. Its parts carry its size (`clutter_parts`).
+fn vehicle(
+    rng: &mut Rng,
+    terrain: &Terrain,
+    layout: Option<&Layout>,
+    near: &impl Fn(&mut Rng, f64) -> (f64, f64),
+    spread: f64,
+) -> Transform {
+    let spot = layout.and_then(|l| {
+        if rng.chance(0.6) {
+            l.track_spot(rng)
+        } else {
+            None
+        }
+    });
+    let (x, z, yaw) = match spot {
+        // local z along the track
+        Some((x, z, a)) => (x, z, a[0].atan2(a[1])),
+        None => {
+            let (x, z) = near(rng, 1.5 * spread);
+            (x, z, rng.range(0.0, std::f64::consts::TAU))
+        }
+    };
+    Transform::from_xyz(x as f32, terrain.height(x, z) as f32, z as f32)
+        .with_rotation(Quat::from_rotation_y(yaw as f32))
+}
+
+/// A bale on a stubble field (`None` if the spot isn't one), moved onto the middle of the
+/// nearest swath if the field has them: balers leave bales in the swath rows.
+fn bale(
+    rng: &mut Rng,
+    terrain: &Terrain,
+    layout: &Layout,
+    near: &impl Fn(&mut Rng, f64) -> (f64, f64),
+    spread: f64,
+) -> Option<Transform> {
+    let (mut x, mut z) = near(rng, 1.5 * spread);
+    let yaw = rng.range(0.0, std::f64::consts::TAU) as f32;
+    let s = rng.range(0.9, 1.1) as f32;
+    let p = layout.parcel_at(x, z);
+    if p.field != rgb::Field::Stubble {
+        return None;
+    }
+    if let Some((spacing, _)) = p.swaths {
+        // t runs across the rows, along (dir.z, -dir.x)
+        let t = x * p.dir[1] - z * p.dir[0];
+        let shift = (t / spacing).floor() * spacing + spacing / 2.0 - t;
+        x += p.dir[1] * shift;
+        z -= p.dir[0] * shift;
+        // the move can cross a field edge
+        if layout.parcel_at(x, z).field != rgb::Field::Stubble {
+            return None;
+        }
+    }
+    Some(
+        Transform::from_xyz(x as f32, terrain.height(x, z) as f32, z as f32)
+            .with_rotation(Quat::from_rotation_y(yaw))
+            .with_scale(Vec3::splat(s)),
+    )
 }
 
 /// Which pool targets are in a shot: ~30% empty frames (like the real data), else a group
@@ -966,14 +1105,41 @@ pub fn spawn_scene(
     ));
 
     let roads = picture(mats, modality);
-    commands.spawn((
-        Mesh3d(meshes.add(road_mesh(world))),
-        MeshMaterial3d(roads.clone()),
-        Look {
-            picture: roads.clone(),
-            id: background.clone(),
-        },
-    ));
+    // RGB paints its tracks and roads into the ground image instead
+    if !rgb {
+        commands.spawn((
+            Mesh3d(meshes.add(road_mesh(world))),
+            MeshMaterial3d(roads.clone()),
+            Look {
+                picture: roads.clone(),
+                id: background.clone(),
+            },
+        ));
+    }
+    // RGB: the painted ground (`fields.rs`) on a copy of the terrain under the camera,
+    // a few centimetres up; rebuilt every shot
+    let overlay = rgb.then(|| {
+        let image = images.add(overlay_image());
+        let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0));
+        let mat = mats.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(image.clone()),
+            perceptual_roughness: 1.0,
+            reflectance: 0.1,
+            cull_mode: None,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(mat.clone()),
+            NotShadowCaster,
+            Look {
+                picture: mat,
+                id: background.clone(),
+            },
+        ));
+        (mesh, image)
+    });
 
     let block = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let cylinder = meshes.add(Cylinder::new(0.5, 1.0));
@@ -999,7 +1165,7 @@ pub fn spawn_scene(
             .map(|_| {
                 let m = picture(mats, modality);
                 // canopies are mottled like the ground (thermal) or leafy (RGB)
-                if kind == ClutterKind::Bush {
+                if matches!(kind, ClutterKind::Bush | ClutterKind::Hedge) {
                     let t = foliage.clone().unwrap_or_else(|| texture.clone());
                     mats.get_mut(&m).unwrap().base_color_texture = Some(t);
                 }
@@ -1104,7 +1270,72 @@ pub fn spawn_scene(
         roads,
         clutter,
         patches,
+        overlay,
+        table: rgb.then(|| NoiseTable::new(world.seed ^ 0x7AB1E)),
     });
+}
+
+/// The painted ground image (`fields.rs`), replaced every shot.
+fn overlay_image() -> Image {
+    let n = OVERLAY_TEX as u32;
+    let mut img = Image::new(
+        Extent3d {
+            width: n,
+            height: n,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        vec![128; (n * n * 4) as usize],
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    img.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor::linear());
+    img
+}
+
+/// The terrain cells under a square (`centre`, `size` metres across), 8 cm above the
+/// terrain, with texture coordinates running 0-1 across the square. Built from the
+/// terrain's own vertices, so it follows the ground exactly and never dips into it.
+fn terrain_patch(world: &World, centre: [f64; 2], size: f64) -> Mesh {
+    let (w, d) = (world.terrain.field.width(), world.terrain.field.depth());
+    let v0 = world.vertices[0];
+    let (x0, z0) = (centre[0] - size / 2.0, centre[1] - size / 2.0);
+    let cell = |v: f64, origin: f64, n: usize| ((v - origin) / CELL_M).clamp(0.0, (n - 1) as f64);
+    let (i0, i1) = (
+        cell(x0, v0[0], w).floor() as usize,
+        cell(x0 + size, v0[0], w).ceil() as usize,
+    );
+    let (j0, j1) = (
+        cell(z0, v0[2], d).floor() as usize,
+        cell(z0 + size, v0[2], d).ceil() as usize,
+    );
+    let (mut pos, mut normals, mut uvs) = (Vec::new(), Vec::new(), Vec::new());
+    for j in j0..=j1 {
+        for i in i0..=i1 {
+            let p = world.vertices[j * w + i];
+            let n = world.normals[j * w + i];
+            pos.push([p[0] as f32, (p[1] + 0.08) as f32, p[2] as f32]);
+            normals.push([n[0] as f32, n[1] as f32, n[2] as f32]);
+            uvs.push([((p[0] - x0) / size) as f32, ((p[2] - z0) / size) as f32]);
+        }
+    }
+    let cols = (i1 - i0 + 1) as u32;
+    let mut idx = Vec::new();
+    for j in 0..(j1 - j0) as u32 {
+        for i in 0..cols - 1 {
+            let k = j * cols + i;
+            let (r, b) = (k + 1, k + cols);
+            idx.extend_from_slice(&[k, b, r, r, b, b + 1]);
+        }
+    }
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(idx))
 }
 
 /// Black patches on white (Holstein cattle, piebald horses and dogs), wrapped round a
@@ -1228,6 +1459,87 @@ fn clutter_parts(
     } = *shapes;
     let half = CLUTTER_MATS / 2;
     match kind {
+        ClutterKind::Hedge => {
+            // 2-3 canopy blobs along local x, overlapping into one ragged segment
+            let k = 2 + rng.index(2);
+            (0..k)
+                .map(|j| {
+                    let x = (j as f32 + 0.5) / k as f32 - 0.5;
+                    let tf = Transform::from_xyz(x, rng.range(-0.1, 0.1) as f32, 0.0).with_scale(
+                        Vec3::new(
+                            rng.range(0.35, 0.55) as f32,
+                            rng.range(0.4, 0.55) as f32,
+                            rng.range(0.4, 0.55) as f32,
+                        ),
+                    );
+                    (
+                        canopies[rng.index(canopies.len())].clone(),
+                        tf,
+                        rng.index(CLUTTER_MATS),
+                    )
+                })
+                .collect()
+        }
+        ClutterKind::Vehicle => {
+            // metres, length along local z, front at +z; body colour and dark glass (also
+            // tyres and a pickup's bed liner)
+            let (body, glass) = (rng.index(half), half + rng.index(half));
+            let b = |x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32, m: usize| {
+                (
+                    block.clone(),
+                    Transform::from_xyz(x, y, z).with_scale(Vec3::new(sx, sy, sz)),
+                    m,
+                )
+            };
+            let wheel = |x: f32, y: f32, z: f32, r: f32, w: f32| {
+                (
+                    shapes.cylinder.clone(),
+                    Transform::from_xyz(x, y, z)
+                        .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
+                        .with_scale(Vec3::new(2.0 * r, w, 2.0 * r)),
+                    glass,
+                )
+            };
+            let u = rng.unit();
+            if u < 0.45 {
+                // car: body, roof, windscreen, rear window, side glass under the roof edge
+                vec![
+                    b(0.0, 0.45, 0.0, 1.8, 0.7, 4.4, body),
+                    b(0.0, 1.0, -0.2, 1.56, 0.35, 1.6, glass),
+                    b(0.0, 1.2, -0.2, 1.5, 0.08, 1.5, body),
+                    b(0.0, 0.92, 0.9, 1.5, 0.5, 0.6, glass),
+                    b(0.0, 0.92, -1.25, 1.5, 0.45, 0.45, glass),
+                ]
+            } else if u < 0.7 {
+                // pickup: cab, and an open bed with a dark liner
+                vec![
+                    b(0.0, 0.5, 0.0, 1.9, 0.8, 5.2, body),
+                    b(0.0, 1.15, 0.6, 1.76, 0.5, 1.5, glass),
+                    b(0.0, 1.42, 0.6, 1.7, 0.08, 1.35, body),
+                    b(0.0, 0.93, -1.4, 1.6, 0.05, 2.1, glass),
+                    b(-0.9, 1.05, -1.4, 0.1, 0.3, 2.2, body),
+                    b(0.9, 1.05, -1.4, 0.1, 0.3, 2.2, body),
+                    b(0.0, 1.05, -2.5, 1.8, 0.3, 0.1, body),
+                ]
+            } else if u < 0.9 {
+                // van: a tall box with the windscreen at its front edge
+                vec![
+                    b(0.0, 1.05, 0.0, 2.0, 2.0, 5.0, body),
+                    b(0.0, 1.75, 2.35, 1.9, 0.5, 0.35, glass),
+                ]
+            } else {
+                // tractor: bonnet, glass cab under a roof, big rear wheels, small front ones
+                vec![
+                    b(0.0, 1.2, 0.9, 0.9, 0.9, 2.2, body),
+                    b(0.0, 1.9, -0.7, 1.5, 1.4, 1.5, glass),
+                    b(0.0, 2.65, -0.7, 1.6, 0.08, 1.7, body),
+                    wheel(-1.05, 0.8, -0.8, 0.8, 0.55),
+                    wheel(1.05, 0.8, -0.8, 0.8, 0.55),
+                    wheel(-0.85, 0.5, 1.5, 0.5, 0.35),
+                    wheel(0.85, 0.5, 1.5, 0.5, 0.35),
+                ]
+            }
+        }
         ClutterKind::Bale => {
             // round (1.5 m across, 1.2 m wide) lying on its side or on end, or square
             // (2.4 x 1.2 x 0.9 m)
@@ -1536,7 +1848,8 @@ impl SceneCtl<'_, '_> {
         }
         let mut places: Vec<_> = shot.clutter.iter().map(|v| v.iter()).collect();
         for (mut tf, mut vis, c) in &mut self.clutter {
-            match places[c.kind as usize].next().and_then(|p| p.as_ref()) {
+            let k = self.modality.clutter_index(c.kind);
+            match places[k].next().and_then(|p| p.as_ref()) {
                 Some(p) => {
                     *tf = *p;
                     *vis = Visibility::Inherited;
@@ -1676,6 +1989,15 @@ impl SceneCtl<'_, '_> {
         if let Some(mut img) = self.images.get_mut(&self.handles.texture) {
             img.data = Some(rgb::ground_texture(&look.ground, TEX_SIZE));
         }
+        if let (Some((mesh, image)), Some(table)) = (&self.handles.overlay, &self.handles.table) {
+            let l = &look.ground.layout;
+            if let Some(mut img) = self.images.get_mut(image) {
+                img.data = Some(crate::fields::paint(l, table, OVERLAY_TEX));
+            }
+            if let Some(mut m) = self.meshes.get_mut(mesh) {
+                *m = terrain_patch(&self.world, l.centre, l.size);
+            }
+        }
         let (_, mut water_vis) = self.water.single_mut().expect("one water surface");
         *water_vis = Visibility::Hidden;
         if let Some(mut m) = self.mats.get_mut(&self.handles.roads) {
@@ -1689,7 +2011,7 @@ impl SceneCtl<'_, '_> {
             .zip(RGB_CLUTTER.iter())
         {
             // canopies carry the foliage texture, so they make up for its base
-            let gain = if kind == ClutterKind::Bush {
+            let gain = if matches!(kind, ClutterKind::Bush | ClutterKind::Hedge) {
                 texture_gain()
             } else {
                 1.0
@@ -1920,7 +2242,7 @@ mod tests {
         let world = World::new(1);
         let kinds = Modality::Rgb.kinds();
         let mut rng = Rng::new(6);
-        let bale = ClutterKind::Bale as usize;
+        let bale = Modality::Rgb.clutter_index(ClutterKind::Bale);
         let (mut nadir, mut bales_off_stubble, mut empty) = (0, 0, 0);
         for _ in 0..60 {
             let s = Shot::random(&mut rng, &world, &kinds, &[], 0.4, Modality::Rgb);
@@ -1932,13 +2254,36 @@ mod tests {
             for (p, c) in s.targets.iter().zip(&look.coats) {
                 assert_eq!(p.is_some(), c.is_some());
             }
-            if look.ground.field != rgb::Field::Stubble {
-                bales_off_stubble += s.clutter[bale].iter().flatten().count();
+            for b in s.clutter[bale].iter().flatten() {
+                let (x, z) = (b.translation.x as f64, b.translation.z as f64);
+                let field = look.ground.layout.parcel_at(x, z).field;
+                bales_off_stubble += (field != rgb::Field::Stubble) as usize;
             }
             assert_eq!(look.clutter.len(), s.clutter.len());
         }
         assert!((36..60).contains(&nadir), "{nadir} nadir of 60");
         assert!((6..=36).contains(&empty), "{empty} empty of 60");
         assert_eq!(bales_off_stubble, 0);
+    }
+
+    #[test]
+    fn rgb_footprint_holds_the_whole_frame() {
+        let world = World::new(2);
+        let kinds = Modality::Rgb.kinds();
+        let mut rng = Rng::new(8);
+        for _ in 0..40 {
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.0, Modality::Rgb);
+            let l = &s.rgb.as_ref().unwrap().ground.layout;
+            // the ground under the frame centre is inside the painted square, and the
+            // square is at least the nadir frame's width
+            let fwd = s.camera.rotation * Vec3::NEG_Z;
+            let eye = s.camera.translation;
+            let t = -(s.altitude_m as f32) / fwd.y;
+            let c = eye + fwd * t;
+            assert!((c.x as f64 - l.centre[0]).abs() < l.size / 2.0);
+            assert!((c.z as f64 - l.centre[1]).abs() < l.size / 2.0);
+            let width = 2.0 * s.altitude_m * (s.vfov_deg / 2.0).to_radians().tan() * 4.0 / 3.0;
+            assert!(l.size >= width, "{} < {width}", l.size);
+        }
     }
 }
