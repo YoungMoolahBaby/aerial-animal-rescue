@@ -602,7 +602,12 @@ mod tests {
         assert_eq!(t.len(), size * size * 4);
         let row = |y: usize| &t[y * size * 4..(y + 1) * size * 4];
         // stripes run along v: columns differ, and a wrap-around stays smooth
-        let col = |x: usize| t[4 * x + 1] as i32;
+        let col = |x: usize| {
+            (0..size)
+                .map(|y| t[4 * (y * size + x) + 1] as i32)
+                .sum::<i32>()
+                / size as i32
+        };
         assert!((0..size).map(col).max() > (0..size).map(col).min());
         assert!((col(0) - col(size - 1)).abs() < 60);
         assert!(row(0).iter().skip(3).step_by(4).all(|&a| a == 255));

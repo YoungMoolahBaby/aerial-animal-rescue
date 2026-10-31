@@ -91,6 +91,8 @@ pub struct Parcel {
     pub grain: f64,
     /// Where it reads the noise table, so neighbouring fields don't share a pattern.
     pub offset: [f64; 2],
+    /// Share of `SPECK_CELL_M` cells holding a speck (dead grass, stones, dung, ...).
+    pub specks: f64,
 }
 
 impl Parcel {
@@ -168,6 +170,12 @@ impl Parcel {
             texture: rng.range(0.1, 0.35),
             grain: rng.range(0.3, 0.6),
             offset: [rng.range(0.0, 1000.0), rng.range(0.0, 1000.0)],
+            specks: match field {
+                Field::Pasture => rng.range(0.1, 0.45),
+                Field::Dry => rng.range(0.1, 0.4),
+                Field::Stubble | Field::Bare => rng.range(0.05, 0.2),
+                Field::Crop => rng.range(0.02, 0.08),
+            },
         }
     }
 }
@@ -628,6 +636,7 @@ fn texel(
         let cov = band(d, 0.22, ts);
         c = mix(c, scale(p.rut, 1.0 + 0.1 * grain), 0.85 * cov);
     }
+    c = specks(layout, p, table, c, x, z, ts, grain);
     for r in &layout.ruts {
         let (dx, dz) = (x - r.centre[0], z - r.centre[1]);
         let a = (dz.atan2(dx) - r.from).rem_euclid(TAU);
@@ -681,6 +690,82 @@ fn texel(
     c
 }
 
+/// Specks sit in cells this size, at most one per cell.
+const SPECK_CELL_M: f64 = 1.5;
+
+/// What a speck is: colour, radius range (m), and how much it covers its disc.
+fn speck_kind(h: &mut Rng) -> (Rgb, (f64, f64), f32) {
+    pick(
+        h,
+        &[
+            // dead grass and seed heads, light bare spots: the pale ones a model can take
+            // for a sheep at 10 px (RGB v2's alarms)
+            (0.35, (albedo(205, 195, 155), (0.15, 0.5), 0.85)),
+            (0.15, (albedo(180, 165, 135), (0.3, 0.8), 0.7)),
+            (0.12, (albedo(205, 202, 195), (0.08, 0.3), 1.0)), // stones
+            (0.15, (albedo(70, 60, 42), (0.15, 0.3), 0.9)),    // dung pats
+            (0.08, (albedo(110, 85, 60), (0.3, 0.5), 0.95)),   // molehills
+            (0.15, (albedo(50, 70, 32), (0.2, 0.6), 0.8)),     // thistles, docks
+        ],
+    )
+}
+
+/// The texel's colour with any speck over it: specks in `SPECK_CELL_M` cells, one cell in
+/// `parcel.specks` (more in some patches tens of metres across than in others), each its
+/// own kind, size, elongation and turn, with a ragged edge.
+#[allow(clippy::too_many_arguments)]
+fn specks(
+    layout: &Layout,
+    p: &Parcel,
+    table: &NoiseTable,
+    mut c: Rgb,
+    x: f64,
+    z: f64,
+    ts: f64,
+    grain: f64,
+) -> Rgb {
+    if p.specks <= 0.0 {
+        return c;
+    }
+    let patchy = (0.3 + 1.4 * (0.5 + 0.5 * table.at(x / 15.0 + 3.7, z / 15.0))).max(0.0);
+    let share = p.specks * patchy;
+    let (ci, cj) = (
+        (x / SPECK_CELL_M).floor() as i64,
+        (z / SPECK_CELL_M).floor() as i64,
+    );
+    for dj in -1..=1 {
+        for di in -1..=1 {
+            let (i, j) = (ci + di, cj + dj);
+            let key = layout.seed
+                ^ 0x5BEC_u64
+                ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                ^ (j as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
+            let mut h = Rng::new(key);
+            if h.unit() >= share {
+                continue;
+            }
+            let (cx, cz) = (
+                (i as f64 + h.unit()) * SPECK_CELL_M,
+                (j as f64 + h.unit()) * SPECK_CELL_M,
+            );
+            let (colour, (r0, r1), amount) = speck_kind(&mut h);
+            let r = h.range(r0, r1);
+            let (sa, ca) = h.range(0.0, PI).sin_cos();
+            let long = h.range(1.0, 2.0);
+            let (dx, dz) = (x - cx, z - cz);
+            // in the speck's own axes, stretched along one
+            let (u, v) = (dx * ca + dz * sa, -dx * sa + dz * ca);
+            let d = ((u / long).powi(2) + v * v).sqrt();
+            let ragged = r * (1.0 + 0.3 * grain);
+            let cov = band(d, ragged, ts) * amount;
+            if cov > 0.0 {
+                c = mix(c, scale(colour, 1.0 + 0.12 * grain), cov);
+            }
+        }
+    }
+    c
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,6 +811,7 @@ mod tests {
         l.ruts.clear();
         l.parcels[0].tram_m = 0.0;
         l.parcels[0].swaths = None;
+        l.parcels[0].specks = 0.0;
         l.parcels[0].main = albedo(60, 90, 40);
         l.parcels[0].second = l.parcels[0].main;
         l.tracks = vec![Track {
@@ -747,6 +833,35 @@ mod tests {
             rut > centre + 30.0 && rut > field + 30.0,
             "{rut} {centre} {field}"
         );
+    }
+
+    #[test]
+    fn specks_dot_the_grass_at_their_density() {
+        let mut rng = Rng::new(6);
+        let mut l = Layout::random(&mut rng, [0.0, 0.0], 64.0);
+        l.boundaries.clear();
+        l.parcels.truncate(1);
+        l.tracks.clear();
+        l.ruts.clear();
+        let p = &mut l.parcels[0];
+        (p.field, p.tram_m, p.swaths, p.mow) = (Field::Pasture, 0.0, None, 0.0);
+        (p.main, p.second, p.texture, p.grain) =
+            (albedo(90, 120, 50), albedo(90, 120, 50), 0.0, 0.0);
+        let table = NoiseTable::new(7);
+        let changed = |l: &Layout| {
+            let img = paint(l, &table, 320);
+            let base = img[1];
+            img.chunks(4)
+                .filter(|px| (px[1] as i32 - base as i32).abs() > 12)
+                .count() as f64
+                / (320.0 * 320.0)
+        };
+        l.parcels[0].specks = 0.0;
+        let none = changed(&l);
+        l.parcels[0].specks = 0.3;
+        let some = changed(&l);
+        // a speck covers ~0.1-1 m2 of each 2.25 m2 cell that holds one
+        assert!(none < 0.01 && (0.02..0.3).contains(&some), "{none} {some}");
     }
 
     #[test]
