@@ -707,6 +707,11 @@ dog, boar).
     - Next candidates: a few crisp white specks; bleached dead wood (fallen trees,
       branches); farm objects (troughs, feeders, gates, benches). Or a mixed real + sim
       RGB run, which is the real judge.
+  - Mixed run `sim_p6_rgb3` (2026-10-31): `sim_p6`'s set plus the 4,000 RGB v3 images
+    (`D:/aar/processed_sim_p6_rgb3`: real train 10,520 + 8,000 sim; val and test
+    file-for-file the same as `sim_p6`), same settings, 60 epochs. Against `sim_p6` only
+    the RGB sim differs. Judged on real RGB cattle AP50 and RGB alarms, with thermal
+    expected to hold within noise (~0.04 per class).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
