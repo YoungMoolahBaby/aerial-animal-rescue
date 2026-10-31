@@ -618,6 +618,55 @@ dog, boar).
       032 and 056, cattle AP50).
     - The real judge is still a mixed run (real + sim RGB). With real RGB cows in
       training, the alarm rate there is likely set by the real images, as in thermal.
+  - RGB v2, field structure (2026-10-31, `fields.rs`):
+    - Each shot paints the ground under the camera: 2048 px, about one texel per picture
+      pixel, on a copy of the terrain 8 cm up. The ground shading and tiling texture
+      couldn't draw sharp straight lines.
+    - Fields with straight edges on one grid angle: pasture, dry grass, stubble, a green
+      crop, bare soil. Edges are plain, fenced (uncut strip, faint wire, posts) or hedged
+      (hedge geometry with shadows).
+    - Farm tracks with bright wheel ruts and a grass centre, gravel tracks, the odd paved
+      road. They replace the thermal ribbon roads in RGB.
+    - Mowing stripes, furrows, tramlines, straw swaths with the bales in the rows,
+      vehicle ruts across grass.
+    - Vehicles: car, pickup, van, tractor, often on a track; up to 6 instead of 10 plain
+      box cars.
+    - Pixel-scale detail: median neighbour difference 9.0, real train flights 9.0, v1
+      5.5. The first v2 render was 3.0 (no grain), fixed before the pools.
+    - Pools `D:/aar/interim/sim_rgb2_w10..17` (seeds as v1), set `D:/aar/sim_rgb2_only`,
+      run `runs/train/sim_only_rgb2`, eval `runs/eval/sim_only_rgb2_val.json`. The
+      training was stopped by Claude Code for low memory after its 6th epoch;
+      results.csv and best.pt were complete.
+  - Result RGB v2:
+    - Zero-shot, `hituav` on world 10: cattle found 89-96% (v1 89-95%), alarms per
+      empty frame 2.37 (v1 2.76). Its top alarms are now objects (bushes, stones, bales,
+      vehicles), not ground lines.
+    - Sim-only on real RGB val (per-epoch val mAP50, v1 in brackets): 0.63 (0.11), 0.70
+      (0.58), 0.69 (0.59), 0.66 (0.59), 0.70 (0.42), 0.68 (0.42). It no longer
+      collapses after epoch 3.
+
+      | real RGB val | `hituav` | sim-only v1 | sim-only v2 |
+      |---|---|---|---|
+      | cattle AP50 | 0.904 | 0.600 | 0.691 |
+      | flight 070, dense herd | 0.974 | 0.888 | 0.968 |
+      | flight 061 | 0.854 | 0.609 | 0.634 |
+      | flight 032, bale field | 0.899 | 0.512 | 0.420 |
+      | flight 056 | 0.834 | 0.201 | 0.281 |
+      | alarms per empty frame, conf 0.25 / 0.5 | 0.62 / 0.26 | 9.9 / 0.58 | 27.3 / 4.1 |
+
+    - Alarms on the 141 empty real frames, conf 0.25: sheep/goat 976 -> 3,359, cattle
+      415 -> 372; under 16 px 1,048 -> 3,510. One empty 032 frame gets 122 boxes.
+    - So field structure helps cattle (070 now nearly matches the real-trained model) and
+      didn't add cattle alarms. The jump is tiny "sheep": the model fires on small pale
+      specks in grass (dead-grass tufts, stones, light bare spots, dung). Sim sheep are
+      5-15 px pale blobs, and the painted ground has grain and clumps but no discrete
+      specks of that size. v1's tiling texture had bright "dry tuft" specks; the painted
+      ground dropped them.
+    - Real val has no sheep, so every sheep box there is a false alarm. The real images
+      that would teach "pale speck = background" are the ones the sim must supply.
+    - Next (v3): sparse discrete specks in the painted ground, 0.2-1.5 m: pale dead
+      grass, stones, light bare spots, dung pats, molehills, thistles. Judged on sheep
+      alarms and cattle AP50.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
