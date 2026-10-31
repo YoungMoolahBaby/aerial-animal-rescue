@@ -667,6 +667,46 @@ dog, boar).
     - Next (v3): sparse discrete specks in the painted ground, 0.2-1.5 m: pale dead
       grass, stones, light bare spots, dung pats, molehills, thistles. Judged on sheep
       alarms and cattle AP50.
+  - RGB v3, specks (2026-10-31, `fields.rs` `specks`):
+    - One chance of a speck per 1.5 m cell, at a share set per parcel (pasture and dry
+      grass most, crops least) and thinned in patches 15 m across. Kinds: pale dead-grass
+      tufts, light bare spots, stones, dung, molehills, dark weeds. Each is 0.05-0.5 m,
+      a little stretched, with a wobbly rim, broken up by the grain, and only partly
+      covering the grass.
+    - The first try (larger, solid-filled specks) looked like cows to the real model:
+      zero-shot `hituav` on world 10 gave 8.23 alarms per empty frame (v2 2.37) and
+      found only 72% of tiny cattle. Smaller, fainter, ragged specks brought that to 1.53
+      alarms and 91%; that version made the pools.
+    - Pools `D:/aar/interim/sim_rgb3b_w10..17` (seeds as v1), set `D:/aar/sim_rgb3b_only`,
+      run `runs/train/sim_only_rgb3`, eval `runs/eval/sim_only_rgb3_val.json`.
+  - Result RGB v3:
+    - Per-epoch val mAP50 (v2 in brackets): 0.70 (0.63), 0.68 (0.70), 0.58 (0.69),
+      0.70 (0.66), 0.67 (0.70), 0.72 (0.68).
+
+      | real RGB val | `hituav` | sim-only v1 | sim-only v2 | sim-only v3 |
+      |---|---|---|---|---|
+      | cattle AP50 | 0.904 | 0.600 | 0.691 | 0.739 |
+      | flight 070, dense herd | 0.974 | 0.888 | 0.968 | 0.966 |
+      | flight 061 | 0.854 | 0.609 | 0.634 | 0.585 |
+      | flight 032, bale field | 0.899 | 0.512 | 0.420 | 0.535 |
+      | flight 056 | 0.834 | 0.201 | 0.281 | 0.474 |
+      | alarms per empty frame, conf 0.25 / 0.5 | 0.62 / 0.26 | 9.9 / 0.58 | 27.3 / 4.1 | 5.6 / 0.65 |
+      | precision at conf 0.5 | | | 0.36 | 0.72 |
+
+    - Alarms on the 141 empty real frames, conf 0.25 (v2 in brackets): sheep/goat 245
+      (3,359), cattle 208 (372), person 193 (65), horse 78 (7), dog 71 (46); under
+      16 px 602 (3,510). The empty 032 frames went from 34.8 alarms each to 5.9.
+    - Specks work: sheep alarms fall 14x and cattle AP50 is the best sim-only yet, with
+      the two hard flights (032, 056) up most. Alarms at conf 0.5 are near v1's and
+      only 2.5x the real-trained model's. 061 dips; it has 17 frames, so that may be noise.
+    - What's left (top 30 alarm crops): crisp near-white spots in grass, brighter and
+      sharper than v3's specks (paper, plastic, white stones, bleached dung); bleached
+      fallen branches and dead trees (the worst frame, 27 boxes, is a dead tree lying by
+      a stream); a white trough, a board, a bench, a manhole on asphalt, fence posts.
+      The person and horse alarms are these elongated pale things.
+    - Next candidates: a few crisp white specks; bleached dead wood (fallen trees,
+      branches); farm objects (troughs, feeders, gates, benches). Or a mixed real + sim
+      RGB run, which is the real judge.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
