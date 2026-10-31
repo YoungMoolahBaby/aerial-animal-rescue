@@ -587,6 +587,37 @@ dog, boar).
     - farmyards;
     - flood and debris in RGB;
     - cats.
+  - Result RGB v1 (2026-10-31). Pools: `D:/aar/interim/sim_rgb1_w10..17`. Sim-only set:
+    `D:/aar/sim_rgb1_only`. Run: `runs/train/sim_only_rgb1`. Eval:
+    `runs/eval/sim_only_rgb1_val.json`.
+    - Zero-shot, `hituav` on world 10:
+      - it finds sim cattle about as often as real ones: 89% tiny, 95% small, 80%
+        medium, against 93% of real val's (mostly medium) cows;
+      - it finds sim horses at 78-88% and sim sheep at 43-86%, as some class;
+      - alarms per empty frame: 2.76, against 0.62 on real RGB val. The top ones are
+        the plain box cars and square and round bales.
+    - Sim-only, 6 epochs, scored on the 197 real RGB val frames. The best epoch is 3
+      (0.588 in training's own val); epochs 5-6 fall to 0.42 (overfitting to sim).
+
+      | real RGB val | `hituav` (real RGB cows in training) | sim-only RGB v1 |
+      |---|---|---|
+      | cattle AP50 | 0.904 | 0.600 |
+      | flight 070, dense herd, 344 cows | 0.974 | 0.888 |
+      | flight 061 | 0.854 | 0.609 |
+      | flight 032, bale field | 0.899 | 0.512 |
+      | flight 056 | 0.834 | 0.201 |
+      | alarms per empty frame, conf 0.25 / 0.5 | 0.62 / 0.26 | 9.9 / 0.58 |
+
+    - Sim cows transfer: 0.60 AP50 and 0.89 on the dense-herd flight, with no real RGB
+      image in training. The thermal sim-only proxies reached about 0.09 overall.
+    - What fails is the background. On empty real frames the sim-only model fires on
+      bright straight or elongated ground: wheel ruts and tramlines, track edges, field
+      boundaries, straw swaths, light bare patches, and bales seen up close. Nothing like
+      them is in the sim, so it never learned they're background. The field structure
+      listed under "not built yet" is the next step, judged the same way (alarms on
+      032 and 056, cattle AP50).
+    - The real judge is still a mixed run (real + sim RGB). With real RGB cows in
+      training, the alarm rate there is likely set by the real images, as in thermal.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
