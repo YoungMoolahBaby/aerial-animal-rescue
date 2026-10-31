@@ -693,19 +693,22 @@ fn texel(
 /// Specks sit in cells this size, at most one per cell.
 const SPECK_CELL_M: f64 = 1.5;
 
-/// What a speck is: colour, radius range (m), and how much it covers its disc.
+/// What a speck is: colour, radius range (m), and how much it covers its disc at most.
+/// Kept under ~1 m and patchy: the first v3 render had specks up to 3 m long, smooth and
+/// evenly filled, and the real-trained model took them for cows (8.2 alarms per empty
+/// frame, cattle found 72% instead of 91%).
 fn speck_kind(h: &mut Rng) -> (Rgb, (f64, f64), f32) {
     pick(
         h,
         &[
             // dead grass and seed heads, light bare spots: the pale ones a model can take
             // for a sheep at 10 px (RGB v2's alarms)
-            (0.35, (albedo(205, 195, 155), (0.15, 0.5), 0.85)),
-            (0.15, (albedo(180, 165, 135), (0.3, 0.8), 0.7)),
-            (0.12, (albedo(205, 202, 195), (0.08, 0.3), 1.0)), // stones
-            (0.15, (albedo(70, 60, 42), (0.15, 0.3), 0.9)),    // dung pats
-            (0.08, (albedo(110, 85, 60), (0.3, 0.5), 0.95)),   // molehills
-            (0.15, (albedo(50, 70, 32), (0.2, 0.6), 0.8)),     // thistles, docks
+            (0.35, (albedo(205, 195, 155), (0.1, 0.35), 0.75)),
+            (0.15, (albedo(180, 165, 135), (0.2, 0.5), 0.55)),
+            (0.12, (albedo(195, 192, 185), (0.05, 0.2), 0.9)), // stones
+            (0.15, (albedo(70, 60, 42), (0.1, 0.25), 0.8)),    // dung pats
+            (0.08, (albedo(110, 85, 60), (0.2, 0.4), 0.8)),    // molehills
+            (0.15, (albedo(50, 70, 32), (0.15, 0.4), 0.6)),    // thistles, docks
         ],
     )
 }
@@ -751,13 +754,22 @@ fn specks(
             let (colour, (r0, r1), amount) = speck_kind(&mut h);
             let r = h.range(r0, r1);
             let (sa, ca) = h.range(0.0, PI).sin_cos();
-            let long = h.range(1.0, 2.0);
+            let long = h.range(1.0, 1.5);
+            let amount = amount * h.range(0.5, 1.0) as f32;
+            let (p2, p3) = (h.range(0.0, TAU), h.range(0.0, TAU));
             let (dx, dz) = (x - cx, z - cz);
-            // in the speck's own axes, stretched along one
+            if dx.abs() > 1.0 || dz.abs() > 1.0 {
+                continue;
+            }
+            // in the speck's own axes, stretched along one; an irregular rim
             let (u, v) = (dx * ca + dz * sa, -dx * sa + dz * ca);
             let d = ((u / long).powi(2) + v * v).sqrt();
-            let ragged = r * (1.0 + 0.3 * grain);
-            let cov = band(d, ragged, ts) * amount;
+            let a = v.atan2(u);
+            let rim = r * (1.0 + 0.25 * (2.0 * a + p2).sin() + 0.2 * (3.0 * a + p3).sin());
+            let ragged = rim * (1.0 + 0.3 * grain);
+            // patchy inside: tufts, not paint
+            let fill = (0.55 + 0.45 * table.at(x / 0.15 + 7.1, z / 0.15)).clamp(0.2, 1.0) as f32;
+            let cov = band(d, ragged, ts) * amount * fill;
             if cov > 0.0 {
                 c = mix(c, scale(colour, 1.0 + 0.12 * grain), cov);
             }
@@ -860,8 +872,11 @@ mod tests {
         let none = changed(&l);
         l.parcels[0].specks = 0.3;
         let some = changed(&l);
-        // a speck covers ~0.1-1 m2 of each 2.25 m2 cell that holds one
-        assert!(none < 0.01 && (0.02..0.3).contains(&some), "{none} {some}");
+        // a speck covers ~0.05-0.6 m2, faintly in places, of each 2.25 m2 cell holding one
+        assert!(
+            none < 0.005 && (0.005..0.3).contains(&some),
+            "{none} {some}"
+        );
     }
 
     #[test]
