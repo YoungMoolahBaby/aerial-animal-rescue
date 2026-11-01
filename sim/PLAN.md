@@ -764,6 +764,15 @@ dog, boar).
     - Lesson: one mixed run per change can't judge a sim change. Judge on at least two
       seeds, or where the sim is meant to matter: classes or scenes with little or no
       real data.
+  - Scarce-data test (2026-11-01): does RGB sim help when real RGB is scarce?
+    - Real RGB train cut to two flights, 039 and 042: 92 of 986 frames, 390 of 3,316
+      cows. Neither was flown on the same day as a val flight (055, 060 and 071 were, and
+      are left out). All thermal train (real + 4,000 v6 sim) stays.
+    - `scarce_rgb` (no RGB sim) against `scarce_rgb_sim` (+ the 4,000 RGB v3 images),
+      seeds 0 and 1 each, same settings as sim_p6_rgb3. Train lists on `D:/aar/scarce/`,
+      images and val from `D:/aar/processed_sim_p6_rgb3`; configs `runs/scarce_rgb*.yaml`.
+    - Judged on real RGB cattle AP50 and RGB alarms, against the full-data runs (~0.89-0.94).
+      The gap the sim closes should be well above the seed noise seen above.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
