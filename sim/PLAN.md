@@ -738,6 +738,32 @@ dog, boar).
     - Next: the same run with seed 1 (`sim_p6_rgb3_s1`, `train_baseline.py --seed 1`).
       362 back near 0.75 = the slip was noise and RGB v3 joins the base; near 0.58 =
       dilution, and the next try is fewer RGB sim images or more thermal sim.
+  - Result seed 1 (2026-11-01, `runs/eval/sim_p6_rgb3_s1_val.json`; early-stopped at
+    epoch 50, best 30; seed 0's best was 45 of 60):
+
+    | real val | sim_p6 | sim_p6_rgb3 seed 0 | seed 1 |
+    |---|---|---|---|
+    | overall mAP50 / 50-95 | 0.608 / 0.327 | 0.601 / 0.344 | 0.592 / 0.336 |
+    | cattle (RGB) | 0.898 | 0.936 | 0.894 |
+    | RGB flights 070 / 061 / 056 / 032 | .943 / .872 / .832 / .921 | .982 / .938 / .860 / .937 | .951 / .864 / .795 / .927 |
+    | RGB recall / alarms, conf 0.25 | 0.872 / 0.035 | 0.921 / 0.000 | 0.876 / 0.028 |
+    | thermal mAP50 | 0.464 | 0.434 | 0.441 |
+    | person / other_animal | 0.233 / 0.694 | 0.180 / 0.687 | 0.207 / 0.675 |
+    | thermal flights 362 / 58 / 60 | .759 / .300 / .564 | .575 / .211 / .595 | .702 / .109 / .372 |
+    | thermal alarms, conf 0.25 | 0.149 | 0.164 | 0.191 |
+
+    - Both of seed 0's moves were the seed. Flight 362 came back to 0.70, so the thermal
+      slip wasn't dilution. But the RGB gain went too: cattle 0.894, the same as sim_p6,
+      and three of the four flights fell back.
+    - Seed noise on this val set is larger than the ~0.04 assumed: cattle 0.04, flight
+      58 0.10, flight 60 0.22, between two runs on identical data.
+    - So in a mixed run, RGB v3 sim neither helps nor hurts measurably. The real RGB
+      cows (986 train frames) already put cattle near 0.90; there is little left for sim
+      to add on these four flights. sim_p6 is itself one seed, so its 362 (0.759) and
+      58 (0.300) may also be lucky.
+    - Lesson: one mixed run per change can't judge a sim change. Judge on at least two
+      seeds, or where the sim is meant to matter: classes or scenes with little or no
+      real data.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
