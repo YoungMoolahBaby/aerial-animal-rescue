@@ -712,6 +712,29 @@ dog, boar).
     file-for-file the same as `sim_p6`), same settings, 60 epochs. Against `sim_p6` only
     the RGB sim differs. Judged on real RGB cattle AP50 and RGB alarms, with thermal
     expected to hold within noise (~0.04 per class).
+  - Result `sim_p6_rgb3` (2026-11-01, 60 epochs, ~7.8 h; `runs/eval/sim_p6_rgb3_val.json`):
+
+    | real val | hituav (real only) | sim_p6 | sim_p6_rgb3 |
+    |---|---|---|---|
+    | overall mAP50 / 50-95 | 0.596 / 0.316 | 0.608 / 0.327 | 0.601 / 0.344 |
+    | cattle (RGB) | 0.904 | 0.898 | 0.936 |
+    | RGB flights 070 / 061 / 056 / 032 | .974 / .854 / .834 / .899 | .943 / .872 / .832 / .921 | .982 / .938 / .860 / .937 |
+    | RGB recall / alarms per empty frame, conf 0.25 | 0.912 / 0.62 | 0.872 / 0.035 | 0.921 / 0.000 |
+    | RGB recall, conf 0.5 | 0.854 | 0.768 | 0.846 |
+    | thermal mAP50 | 0.442 | 0.464 | 0.434 |
+    | person / other_animal | 0.214 / 0.671 | 0.233 / 0.694 | 0.180 / 0.687 |
+    | thermal flights 362 / 58 / 60 | .623 / .154 / .367 | .759 / .300 / .564 | .575 / .211 / .595 |
+    | thermal alarms per empty frame, conf 0.25 | 0.169 | 0.149 | 0.164 |
+
+    - RGB sim helps real RGB: cattle 0.936 is the best of any run, every one of the four
+      flights is up on both other models, recall is back above the real-only model's,
+      and no empty RGB frame gets an alarm. The single gain (+0.03-0.04) is at the noise
+      level, but four flights all moving the same way makes it more than noise.
+    - Thermal slips: mAP50 0.464 -> 0.434, person 0.233 -> 0.180, almost all of it flight
+      362 (0.759 -> 0.575) and 58. 362 has moved this much between runs before (hituav
+      0.623, sim_p3 0.713, sim_p6 0.759), so it may be noise; it may also be dilution, as
+      the thermal share of train fell from 93% to 73% (13,534 of 18,520). Thermal alarms hold.
+    - Overall mAP50-95 0.344 is the best yet (larger and better-placed RGB boxes).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
