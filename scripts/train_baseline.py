@@ -45,6 +45,12 @@ def main() -> None:
         help="data loader processes; Ultralytics' default of 8 ran out of Windows page file "
         "during validation on a 32 GB machine",
     )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Ultralytics' default; a second seed shows how much a result is run-to-run noise",
+    )
     p.add_argument("--name", default="baseline")
     args = p.parse_args()
 
@@ -60,6 +66,7 @@ def main() -> None:
         workers=args.workers,
         patience=args.patience,
         scale=args.scale,
+        seed=args.seed,
     )
 
 

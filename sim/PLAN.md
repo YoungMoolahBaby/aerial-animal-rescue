@@ -735,6 +735,9 @@ dog, boar).
       0.623, sim_p3 0.713, sim_p6 0.759), so it may be noise; it may also be dilution, as
       the thermal share of train fell from 93% to 73% (13,534 of 18,520). Thermal alarms hold.
     - Overall mAP50-95 0.344 is the best yet (larger and better-placed RGB boxes).
+    - Next: the same run with seed 1 (`sim_p6_rgb3_s1`, `train_baseline.py --seed 1`).
+      362 back near 0.75 = the slip was noise and RGB v3 joins the base; near 0.58 =
+      dilution, and the next try is fewer RGB sim images or more thermal sim.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
