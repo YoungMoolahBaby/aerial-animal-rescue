@@ -806,6 +806,36 @@ dog, boar).
     - So: where real RGB exists (cattle) the sim adds nothing measurable; where it's
       scarce, the sim gives most of what the real data would. That is the case for the
       classes and scenes with no real data at all (horses, sheep, dogs, cats, floods).
+    - Caveat: 039 and 042 are both from Jalogny, the farm of val flights 032 and 056.
+      That's why 032 is near full with 92 frames. 061 and 070 are from "Other_farms",
+      whose train flights (060, 062, 071) were all left out.
+  - Why 061 lags (2026-11-02, scratch `flight_misses.py` / `grass_split.py`; cows found
+    at conf 0.25, IoU 0.5; "yard" = little green around the box):
+
+    | flight 061, 106 cows | on grass (59) | in the yard (47) |
+    |---|---|---|
+    | scarce, no sim (s0 / s1) | 42 / 48 | 0 / 0 |
+    | scarce + RGB sim (s0 / s1) | 53 / 54 | 0 / 1 |
+    | sim-only v3 | 56 | 14 |
+    | full data (sim_p6 / sim_p6_rgb3 s1) | 52 / 59 | 27 / 24 |
+
+    - 44% of 061's cows stand in a farmyard: pens with straw and mud bedding, metal rails
+      and gates, often half under a shed roof, packed together. The scarce models find
+      none of them, with or without sim; full data finds about half (from 060, the same
+      farm on the same day). On grass, the sim takes the scarce model from 76% to 91%
+      (full data 88-100%).
+    - The sim has no farmyard: only open fields. Sim-only still finds 14 yard cows, so
+      a cow shape partly carries over; the 92 real pasture frames seem to teach the
+      mixed model that cows stand on grass.
+    - Next candidate (RGB v4): a farmyard scene. Pens and yards with straw, mud and
+      concrete, rails, gates and feed barriers, sheds whose roofs hide part of the
+      herd, crowded cows lying and standing. Also the place animals are trapped in a
+      flood. Look tuned on the train flights only; judged on 061's yard cows in the
+      scarce setting.
+    - Yard cows in the train flights (same green test): 060 152, 062 61, Derval 012 62
+      and 014 47, Jalogny 058 44 and 059 43; Mauron and 071 none. 039/042 have 9 and 15,
+      so the scarce runs saw almost no yard cows. The green test is rough: brown dry
+      grass also counts as yard.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
