@@ -836,6 +836,52 @@ dog, boar).
       and 014 47, Jalogny 058 44 and 059 43; Mauron and 071 none. 039/042 have 9 and 15,
       so the scarce runs saw almost no yard cows. The green test is rough: brown dry
       grass also counts as yard.
+  - RGB v4, farmyards (2026-11-02, `yard.rs`):
+    - The train-flight yards (060, 062, Derval) have long sheds with light sheet roofs,
+      some open-fronted; railed pens in front on straw, mud or concrete; a trampled
+      muddy gateway into the field with ring feeders; a silage clamp under black
+      plastic held down by tyres; tyre stacks, a manure heap, wrapped bales. Some
+      "yard" cows are just bunched in tree shade (Derval); not built.
+    - 35% of RGB shots get a yard somewhere in the frame, its sheds along the field
+      grid: 1-3 sheds (half open-fronted), a railed pen in front of most (bays, a gate),
+      hard standing, mud at gates and sometimes a wide trampled gateway, feeders, a
+      clamp and heap off one end, wrapped bales in a row. Sheds, rails (3 m panels),
+      feeders and stacks are 3D and cast shadows; the ground is painted. Roofs and walls
+      carry a weathered sheet texture; one yard's rails share one paint.
+    - In 80% of yard shots the herd moves into the yard, most of it into one area (a
+      pen, the front 4 m of an open shed where the roof hides part of it, or the mud),
+      centres at least 1.4 m apart. Hedges, bushes, houses and bales stay out of it.
+    - Thermal unchanged (md5 of the 24-frame seed-3 pool). Pools
+      `D:/aar/interim/sim_rgb4_w10..17` (seeds as v1).
+    - Judged like v3: zero-shot and sim-only first (cheap), then the scarce setting with
+      the v4 sim on seeds 0 and 1 against scarce + v3 (cattle 0.764 / 0.774; 061 yard
+      cows 0 / 1 of 47).
+    - Pools: 35% of shots have a yard (162-187 per world), 30% of bodies stand in one.
+  - Result RGB v4, cheap checks:
+    - Zero-shot `hituav` on world 10 (v3 in brackets): cattle found tiny 74% (72%),
+      small 78% (91%), medium 62% (81%); alarms per empty frame 1.65 (1.53). Yard cows
+      are harder for the real model too (it finds about half of 061's). Its top alarms
+      on v4 are clutter look-alikes: bushes, vehicles, wrapped bales, troughs, tanks.
+    - Sim-only, 6 epochs, real RGB val (v3 in brackets; RGB frames only):
+
+      | | sim-only v3 | sim-only v4 |
+      |---|---|---|
+      | RGB mAP50 | 0.739 | 0.729 |
+      | flights 070 / 061 / 056 / 032 | .966 / .585 / .474 / .535 | .948 / .622 / .304 / .864 |
+      | alarms per empty frame, conf 0.25 / 0.5 | 5.6 / 0.65 | 0.53 / 0.035 |
+      | precision, conf 0.5 | 0.72 | 0.89 |
+      | 061 cows found, grass / yard | 56 / 14 | 51 / 11 |
+
+    - Alarms fall tenfold and the bale field (032) goes from 0.54 to 0.86: the yards'
+      clutter teaches background. Overall cattle ties (0.73).
+    - Yard cows don't improve (11 vs 14 of 47). Caveats: 061's 47 yard boxes are 17
+      frames of essentially one pen, so this is one scene; and a 6-epoch sim-only run
+      is noisy. Side by side, the real pen holds cows packed into small stalls, often
+      lying flank to flank; sim yard cows are spread over a bigger pen. Not tuned
+      further against that one val scene.
+    - (`evaluate.py`'s per-class cattle AP also counts cattle boxes on thermal frames;
+      from here on the RGB-only `by_modality` number is the cattle figure. For v1-v3
+      they were within 0.01; for v4 0.667 vs 0.729.)
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
