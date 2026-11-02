@@ -773,6 +773,39 @@ dog, boar).
       images and val from `D:/aar/processed_sim_p6_rgb3`; configs `runs/scarce_rgb*.yaml`.
     - Judged on real RGB cattle AP50 and RGB alarms, against the full-data runs (~0.89-0.94).
       The gap the sim closes should be well above the seed noise seen above.
+  - Result scarce-data test (2026-11-02, `runs/eval/scarce_rgb*_val.json`; best epochs:
+    no sim 18 of 38 and 33 of 53, with sim 60 of 60 and 41 of 60):
+
+    | real RGB val | full data (sim_p6, sim_p6_rgb3 s0/s1) | scarce, no sim (s0 / s1) | scarce + RGB sim (s0 / s1) |
+    |---|---|---|---|
+    | cattle AP50 | 0.898 / 0.936 / 0.894 | 0.505 / 0.598 | 0.764 / 0.774 |
+    | cattle AP50-95 | 0.611 / 0.680 / 0.636 | 0.241 / 0.302 | 0.489 / 0.480 |
+    | flight 070, dense herd | .943 / .982 / .951 | .429 / .560 | .914 / .845 |
+    | flight 061 | .872 / .938 / .864 | .302 / .345 | .486 / .478 |
+    | flight 056 | .832 / .860 / .795 | .664 / .696 | .606 / .744 |
+    | flight 032, bale field | .921 / .937 / .927 | .866 / .914 | .904 / .907 |
+    | RGB recall, conf 0.25 | 0.872 / 0.921 / 0.876 | 0.515 / 0.628 | 0.720 / 0.776 |
+    | RGB alarms per empty frame, conf 0.25 | 0.035 / 0.000 / 0.028 | 0.177 / 0.560 | 0.035 / 0.050 |
+    | RGB precision, conf 0.5 | 0.968 / 0.980 / 0.963 | 0.715 / 0.746 | 0.899 / 0.852 |
+    | thermal mAP50 | 0.464 / 0.434 / 0.441 | 0.516 / 0.441 | 0.440 / 0.462 |
+
+    - The sim carries over when real data is scarce. With 92 real RGB frames, cattle
+      AP50 averages 0.55; adding the RGB sim makes it 0.77 on both seeds, against 0.91
+      with all 986. That closes about 60% of the gap (AP50-95 too: 0.27 -> 0.48, full
+      0.64). Both sim seeds beat both no-sim seeds by 0.17 or more, four times the cattle
+      seed noise.
+    - Recall goes from 0.57 to 0.75 and empty-frame alarms fall to the full-data level.
+    - Most of the gain is the dense herd (070: 0.49 -> 0.88) and 061 (0.32 -> 0.48).
+      032 (bale field) is already near full with 92 frames; 056 is mixed (one seed down,
+      one up). 061 stays far below full data (0.48 vs 0.87); the next look is what it
+      misses.
+    - Sim-only v3 (no real RGB, 6 epochs, no thermal) got 0.739; scarce + sim gets 0.77.
+      Most of the cattle skill here comes from the sim, and 92 real frames add a little.
+    - Thermal is unchanged within noise (scarce_rgb_s0's 0.516 / person 0.309 is the
+      best thermal of any run, by chance: same data as s1 at 0.441).
+    - So: where real RGB exists (cattle) the sim adds nothing measurable; where it's
+      scarce, the sim gives most of what the real data would. That is the case for the
+      classes and scenes with no real data at all (horses, sheep, dogs, cats, floods).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
