@@ -11,6 +11,7 @@
 //!   on each side; sometimes gravel, sometimes a paved road;
 //! - inside a field, along its rows: mowing stripes, tramlines (pairs of wheel tracks
 //!   every 12-36 m), straw swaths on stubble, and curved vehicle ruts across grass.
+//! - in some shots a farmyard (`yard.rs`): pens, mud, a silage clamp, hard standing.
 //!
 //! The image is about one texel per picture pixel (`OVERLAY_TEX` across the footprint), so
 //! lines a few decimetres wide come out sharp like in a 5 K photo scaled to 1280.
@@ -19,11 +20,14 @@ use std::f64::consts::{PI, TAU};
 
 use crate::rgb::{Rgb, albedo, mix, pick, vary};
 use crate::rng::{Rng, lattice};
+use crate::yard::Yard;
 
 /// Texels across the painted ground.
 pub const OVERLAY_TEX: usize = 2048;
 /// Distance between the two wheels of a tractor or car, metres.
 const GAUGE_M: f64 = 1.8;
+/// Share of RGB shots with a farmyard in them (`yard.rs`).
+const YARD_SHARE: f64 = 0.35;
 
 /// What a field is covered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,6 +256,8 @@ pub struct Layout {
     pub tracks: Vec<Track>,
     pub ruts: Vec<Ruts>,
     pub seed: u64,
+    /// A farmyard in the picture, in some shots (`yard.rs`).
+    pub yard: Option<Yard>,
 }
 
 fn unit(angle: f64) -> [f64; 2] {
@@ -316,6 +322,17 @@ impl Layout {
                 tone: rng.range(0.06, 0.15) * if rng.chance(0.5) { 1.0 } else { -1.0 },
             })
             .collect();
+        let seed = rng.next_u64();
+        // somewhere in the frame, its sheds along the field grid
+        let yard = rng.chance(YARD_SHARE).then(|| {
+            let half = 0.25 * (size - 20.0) / 1.1;
+            let origin = [
+                centre[0] + rng.range(-half, half),
+                centre[1] + rng.range(-half, half),
+            ];
+            let turn = grid + PI / 2.0 * rng.index(4) as f64;
+            Yard::random(rng, origin, unit(turn))
+        });
         Self {
             centre,
             size,
@@ -323,7 +340,8 @@ impl Layout {
             parcels,
             tracks,
             ruts,
-            seed: rng.next_u64(),
+            seed,
+            yard,
         }
     }
 
@@ -474,7 +492,7 @@ impl NoiseTable {
     }
 
     /// Bilinear read; one unit of (x, y) is one feature.
-    fn at(&self, x: f64, y: f64) -> f64 {
+    pub(crate) fn at(&self, x: f64, y: f64) -> f64 {
         let (x, y) = (x * TABLE_FEATURE, y * TABLE_FEATURE);
         let (x0, y0) = (x.floor(), y.floor());
         let (fx, fy) = ((x - x0) as f32, (y - y0) as f32);
@@ -488,11 +506,11 @@ impl NoiseTable {
 }
 
 /// Coverage of a line `half` wide at distance `d`, antialiased over one texel `ts`.
-fn band(d: f64, half: f64, ts: f64) -> f32 {
+pub(crate) fn band(d: f64, half: f64, ts: f64) -> f32 {
     ((half + ts / 2.0 - d) / ts).clamp(0.0, 1.0) as f32
 }
 
-fn scale(c: Rgb, f: f64) -> Rgb {
+pub(crate) fn scale(c: Rgb, f: f64) -> Rgb {
     c.map(|v| (v * f as f32).clamp(0.0, 1.0))
 }
 
@@ -687,6 +705,9 @@ fn texel(
             }
         }
     }
+    if let Some(y) = &layout.yard {
+        c = y.paint(table, c, x, z, ts, grain);
+    }
     c
 }
 
@@ -821,6 +842,7 @@ mod tests {
         l.boundaries.clear();
         l.parcels.truncate(1);
         l.ruts.clear();
+        l.yard = None;
         l.parcels[0].tram_m = 0.0;
         l.parcels[0].swaths = None;
         l.parcels[0].specks = 0.0;
@@ -855,6 +877,7 @@ mod tests {
         l.parcels.truncate(1);
         l.tracks.clear();
         l.ruts.clear();
+        l.yard = None;
         let p = &mut l.parcels[0];
         (p.field, p.tram_m, p.swaths, p.mow) = (Field::Pasture, 0.0, None, 0.0);
         (p.main, p.second, p.texture, p.grain) =

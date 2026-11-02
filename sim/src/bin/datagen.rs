@@ -31,7 +31,7 @@ use storm_sim::capture::{PixelBox, PoolWriter, Record, boxes_from_id_mask, id_ma
 use storm_sim::rgb::{self, RgbParams};
 use storm_sim::rng::Rng;
 use storm_sim::scene::{
-    self, BodyModels, ID_STEP, IMAGE_H, IMAGE_W, Modality, SceneCtl, Shot, World,
+    self, BodyModels, ClutterKind, ID_STEP, IMAGE_H, IMAGE_W, Modality, SceneCtl, Shot, World,
 };
 use storm_sim::sensor::{self, SensorParams};
 
@@ -47,7 +47,7 @@ const RGB_LABEL_MARGIN: f32 = 1.0;
 const THERMAL_PARAMS: &str = "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
     targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n";
 const RGB_PARAMS: &str = "image_id,field,sun,sky,sun_elev_deg,vfov_deg,altitude_m,pitch_deg,targets,boxes,\
-    bales,wb_r,wb_b,median,vignette,circle,blur,haze,contrast,saturation,noise,jpeg,bodies\n";
+    bales,yard_sheds,yard_targets,wb_r,wb_b,median,vignette,circle,blur,haze,contrast,saturation,noise,jpeg,bodies\n";
 
 type Slot = Arc<Mutex<Option<Image>>>;
 
@@ -381,6 +381,7 @@ fn write_rgb_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &
     let shot = dg.shot.take().expect("a shot was placed");
     let raw = dg.picture.take().expect("RGB frame captured");
     let look = shot.rgb.as_ref().expect("an RGB shot");
+    let yard = look.ground.layout.yard.as_ref();
     let p = RgbParams::random(&mut dg.rng);
     let out = rgb::apply(&raw, width as usize, height as usize, &p, &mut dg.rng);
     let pad = p.blur_sigma.round() + RGB_LABEL_MARGIN;
@@ -393,7 +394,12 @@ fn write_rgb_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &
         modality: "rgb".into(),
         altitude_m: Some(shot.altitude_m),
         weather: "clear".into(),
-        scene_type: "pasture".into(),
+        scene_type: if yard.is_some() {
+            "farmyard"
+        } else {
+            "pasture"
+        }
+        .into(),
         sequence_id: format!("sim-rgb-world-{}", world.seed),
     };
     let w = dg.writer.as_mut().expect("writer open");
@@ -404,13 +410,24 @@ fn write_rgb_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &
     w.add(&image_id, "jpg", width, height, boxes, &record)
         .expect("write label");
     let d = &look.daylight;
-    let bales = shot
-        .clutter
-        .last()
-        .map_or(0, |b| b.iter().flatten().count());
+    let bales = shot.clutter[Modality::Rgb.clutter_index(ClutterKind::Bale)]
+        .iter()
+        .flatten()
+        .count();
+    // bodies standing in the yard (in a pen, an open shed or on its mud)
+    let in_yard = yard.map_or(0, |y| {
+        shot.targets
+            .iter()
+            .flatten()
+            .filter(|p| {
+                let t = p.transform.translation;
+                y.holds(t.x as f64, t.z as f64)
+            })
+            .count()
+    });
     writeln!(
         dg.params,
-        "{image_id},{},{:.2},{:.2},{:.0},{:.1},{:.1},{:.1},{},{},{},{:.3},{:.3},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{}",
+        "{image_id},{},{:.2},{:.2},{:.0},{:.1},{:.1},{:.1},{},{},{},{},{},{:.3},{:.3},{:.0},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{:.2},{},{}",
         look.ground.field.name(),
         d.sun,
         d.sky,
@@ -421,6 +438,8 @@ fn write_rgb_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &
         shot.n_targets(),
         boxes.len(),
         bales,
+        yard.map_or(0, |y| y.sheds.len()),
+        in_yard,
         p.wb[0],
         p.wb[2],
         p.median,

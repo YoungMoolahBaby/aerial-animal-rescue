@@ -410,6 +410,85 @@ pub fn bale(rng: &mut Rng) -> Rgb {
     vary(rng, c, 0.12)
 }
 
+/// Farm shed roofs: mostly light corrugated sheet (the real yards' sheds), some fibre
+/// cement, dark or rusty.
+pub fn roof(rng: &mut Rng) -> Rgb {
+    let c = pick(
+        rng,
+        &[
+            (0.4, albedo(180, 183, 185)),  // galvanised, light grey
+            (0.2, albedo(205, 205, 195)),  // fibre cement
+            (0.15, albedo(115, 128, 140)), // blue-grey
+            (0.12, albedo(78, 80, 84)),    // dark sheet
+            (0.08, albedo(140, 72, 52)),   // rusty, red
+            (0.05, albedo(72, 96, 76)),    // green
+        ],
+    );
+    vary(rng, c, 0.1)
+}
+
+/// Shed walls: block, boards, sheet.
+pub fn wall(rng: &mut Rng) -> Rgb {
+    let c = pick(
+        rng,
+        &[
+            (0.4, albedo(160, 158, 150)),
+            (0.3, albedo(110, 90, 65)),
+            (0.2, albedo(150, 155, 160)),
+            (0.1, albedo(72, 96, 76)),
+        ],
+    );
+    vary(rng, c, 0.12)
+}
+
+/// Yard metalwork: rails, gates, feeders.
+pub fn metal(rng: &mut Rng) -> Rgb {
+    let c = pick(
+        rng,
+        &[
+            (0.55, albedo(170, 172, 175)), // galvanised
+            (0.15, albedo(60, 100, 70)),
+            (0.12, albedo(150, 50, 40)),
+            (0.1, albedo(50, 80, 140)),
+            (0.08, albedo(120, 85, 60)), // rust
+        ],
+    );
+    vary(rng, c, 0.12)
+}
+
+/// Hay in a feeder, or a plastic tank.
+pub fn fodder(rng: &mut Rng) -> Rgb {
+    let c = pick(
+        rng,
+        &[
+            (0.5, albedo(175, 155, 100)),
+            (0.25, albedo(120, 110, 70)),
+            (0.15, albedo(35, 36, 38)),
+            (0.1, albedo(60, 110, 160)),
+        ],
+    );
+    vary(rng, c, 0.12)
+}
+
+/// Bale wrap film, and tank plastic.
+pub fn film(rng: &mut Rng) -> Rgb {
+    let c = pick(
+        rng,
+        &[
+            (0.45, albedo(30, 31, 33)),
+            (0.25, albedo(225, 228, 225)),
+            (0.2, albedo(70, 100, 72)),
+            (0.1, albedo(170, 180, 185)),
+        ],
+    );
+    vary(rng, c, 0.1)
+}
+
+/// Tyres.
+pub fn rubber(rng: &mut Rng) -> Rgb {
+    vary(rng, albedo(28, 28, 29), 0.15)
+}
+
 pub fn road(rng: &mut Rng) -> Rgb {
     let c = pick(
         rng,

@@ -38,6 +38,7 @@ use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
 use crate::world::Terrain;
+use crate::yard::{Shed, Yard};
 
 /// Frame size of the thermal cameras in our real data (HIT-UAV, most BIRDSAI flights).
 pub const IMAGE_W: u32 = 640;
@@ -111,7 +112,7 @@ impl Modality {
     }
 
     /// Where `kind` is in `clutter()` (and so in a shot's per-kind lists).
-    fn clutter_index(self, kind: ClutterKind) -> usize {
+    pub fn clutter_index(self, kind: ClutterKind) -> usize {
         self.clutter()
             .iter()
             .position(|c| c.0 == kind)
@@ -144,6 +145,14 @@ pub enum ClutterKind {
     Vehicle,
     /// Hedge segments along hedged field edges (RGB only).
     Hedge,
+    /// Farmyard (`yard.rs`, RGB only): closed sheds, open-fronted sheds (roof on posts),
+    /// 3 m rail panels round the pens, ring feeders and troughs, and stacks by the
+    /// buildings (wrapped bales, tyres, tanks).
+    Shed,
+    OpenShed,
+    Rail,
+    Feeder,
+    Stack,
 }
 
 /// Kinds and how many of each the scene holds (in `ClutterKind` order).
@@ -155,15 +164,25 @@ const CLUTTER: [(ClutterKind, usize); 4] = [
 ];
 /// RGB: fewer vehicles than thermal's cars (the plain boxes were the real model's top
 /// alarms on sim frames), and hedges.
-const RGB_CLUTTER: [(ClutterKind, usize); 6] = [
+const RGB_CLUTTER: [(ClutterKind, usize); 11] = [
     (ClutterKind::Bush, 60),
     (ClutterKind::Rock, 10),
     (ClutterKind::House, 8),
     (ClutterKind::Vehicle, 6),
     (ClutterKind::Bale, 40),
     (ClutterKind::Hedge, RGB_HEDGES),
+    (ClutterKind::Shed, 3),
+    (ClutterKind::OpenShed, 3),
+    (ClutterKind::Rail, 240),
+    (ClutterKind::Feeder, 12),
+    (ClutterKind::Stack, 20),
 ];
 const RGB_HEDGES: usize = 160;
+/// One rail panel's length, metres (`ClutterKind::Rail`).
+const RAIL_M: f64 = 3.0;
+/// Share of yard shots whose whole herd is in the yard (else only bodies that landed on a
+/// building move there).
+const YARD_HERD: f64 = 0.8;
 
 /// What the pool of bodies holds; datagen picks from it per shot.
 pub const POOL: [(Kind, usize); 10] = [
@@ -593,7 +612,15 @@ impl Shot {
         let layout = ground.as_ref().map(|g| &g.layout);
         let stubble =
             layout.is_some_and(|l| l.parcels.iter().any(|p| p.field == rgb::Field::Stubble));
-        let hedges = layout.map_or_else(Vec::new, |l| l.hedge_segments(rng, RGB_HEDGES));
+        // nothing else stands in a farmyard (vehicles may park on its hard standing)
+        let yard = layout.and_then(|l| l.yard.as_ref());
+        let in_yard = |x: f64, z: f64| yard.is_some_and(|y| y.covers(x, z));
+        let hedges: Vec<_> = layout
+            .map_or_else(Vec::new, |l| l.hedge_segments(rng, RGB_HEDGES))
+            .into_iter()
+            .filter(|h| !in_yard(h.0, h.1))
+            .collect();
+        let yard_parts = yard.map(|y| yard_clutter(y, terrain));
         let mut clutter = Vec::new();
         let mut clutter_c = Vec::new();
         for &(kind, max) in modality.clutter() {
@@ -606,6 +633,11 @@ impl Shot {
                 ClutterKind::Bale => (stubble && rng.chance(0.7)) as usize * (1 + rng.index(max)),
                 ClutterKind::Vehicle => rng.chance(0.3) as usize * (1 + rng.index(max)),
                 ClutterKind::Hedge => hedges.len().min(max),
+                ClutterKind::Shed
+                | ClutterKind::OpenShed
+                | ClutterKind::Rail
+                | ClutterKind::Feeder
+                | ClutterKind::Stack => yard_parts.as_ref().map_or(0, |p| p.of(kind).len()),
             };
             let placed: Vec<Option<Transform>> = (0..max)
                 .map(|i| {
@@ -615,12 +647,28 @@ impl Shot {
                     match kind {
                         ClutterKind::Hedge => return Some(hedge(rng, terrain, hedges[i])),
                         ClutterKind::Vehicle => {
-                            return Some(vehicle(rng, terrain, layout, &near, spread));
+                            let v = vehicle(rng, terrain, layout, &near, spread);
+                            let (x, z) = (v.translation.x as f64, v.translation.z as f64);
+                            return (!yard.is_some_and(|y| y.blocks(x, z))).then_some(v);
                         }
-                        ClutterKind::Bale => return bale(rng, terrain, layout?, &near, spread),
+                        ClutterKind::Bale => {
+                            let b = bale(rng, terrain, layout?, &near, spread)?;
+                            let (x, z) = (b.translation.x as f64, b.translation.z as f64);
+                            return (!in_yard(x, z)).then_some(b);
+                        }
+                        ClutterKind::Shed
+                        | ClutterKind::OpenShed
+                        | ClutterKind::Rail
+                        | ClutterKind::Feeder
+                        | ClutterKind::Stack => {
+                            return yard_parts.as_ref()?.of(kind).get(i).copied();
+                        }
                         _ => {}
                     }
                     let (x, z) = near(rng, 1.5 * spread);
+                    if in_yard(x, z) {
+                        return None;
+                    }
                     let yaw = Quat::from_rotation_y(rng.range(0.0, std::f64::consts::TAU) as f32);
                     let ground = terrain.height(x, z);
                     let at = |y: f64, size: Vec3| {
@@ -677,9 +725,14 @@ impl Shot {
                             )
                         }
                         ClutterKind::Car => at(ground + 0.7, Vec3::new(1.8, 1.5, 4.5)),
-                        ClutterKind::Bale | ClutterKind::Vehicle | ClutterKind::Hedge => {
-                            unreachable!("placed above")
-                        }
+                        ClutterKind::Bale
+                        | ClutterKind::Vehicle
+                        | ClutterKind::Hedge
+                        | ClutterKind::Shed
+                        | ClutterKind::OpenShed
+                        | ClutterKind::Rail
+                        | ClutterKind::Feeder
+                        | ClutterKind::Stack => unreachable!("placed above"),
                     }
                 })
                 .collect();
@@ -687,11 +740,16 @@ impl Shot {
                 .map(|i| match kind {
                     ClutterKind::Bush | ClutterKind::Hedge => conditions.vegetation_c(rng),
                     ClutterKind::Rock | ClutterKind::Bale => conditions.clutter_c(rng),
-                    ClutterKind::House => conditions.building_c(rng),
+                    ClutterKind::House | ClutterKind::Shed | ClutterKind::OpenShed => {
+                        conditions.building_c(rng)
+                    }
                     ClutterKind::Car | ClutterKind::Vehicle if i < CLUTTER_MATS / 2 => {
                         conditions.vehicle_c(rng)
                     }
                     ClutterKind::Car | ClutterKind::Vehicle => conditions.glass_c(rng),
+                    ClutterKind::Rail | ClutterKind::Feeder | ClutterKind::Stack => {
+                        conditions.clutter_c(rng)
+                    }
                 })
                 .collect();
             clutter.push(placed);
@@ -700,6 +758,9 @@ impl Shot {
         let road_c = conditions.road_c(rng);
 
         let mut targets: Vec<Option<Placement>> = targets;
+        if let Some(y) = yard {
+            yard_herd(rng, y, terrain, &mut targets);
+        }
         // Faint shots draw from a stream of their own (seeded by where the camera looks),
         // so every other draw, and the shots after, stay as they were.
         let mut faint_rng = Rng::new(aim[0].to_bits() ^ aim[2].to_bits().rotate_left(29) ^ 0xFA17);
@@ -742,6 +803,13 @@ impl Shot {
                 .clutter()
                 .iter()
                 .map(|&(kind, _)| {
+                    // a yard's rails are all painted alike
+                    if kind == ClutterKind::Rail {
+                        let paint = rgb::metal(rng);
+                        return (0..CLUTTER_MATS)
+                            .map(|_| rgb::vary(rng, paint, 0.04))
+                            .collect();
+                    }
                     (0..CLUTTER_MATS)
                         .map(|i| match kind {
                             ClutterKind::Bush | ClutterKind::Hedge => rgb::canopy(rng),
@@ -752,6 +820,16 @@ impl Shot {
                             }
                             ClutterKind::Car | ClutterKind::Vehicle => rgb::glass(rng),
                             ClutterKind::Bale => rgb::bale(rng),
+                            // first half roofs, metal, film; second half walls, hay, tyres
+                            ClutterKind::Shed | ClutterKind::OpenShed if i < CLUTTER_MATS / 2 => {
+                                rgb::roof(rng)
+                            }
+                            ClutterKind::Shed | ClutterKind::OpenShed => rgb::wall(rng),
+                            ClutterKind::Rail => rgb::metal(rng),
+                            ClutterKind::Feeder if i < CLUTTER_MATS / 2 => rgb::metal(rng),
+                            ClutterKind::Feeder => rgb::fodder(rng),
+                            ClutterKind::Stack if i < CLUTTER_MATS / 2 => rgb::film(rng),
+                            ClutterKind::Stack => rgb::rubber(rng),
                         })
                         .collect()
                 })
@@ -880,6 +958,124 @@ fn bale(
             .with_rotation(Quat::from_rotation_y(yaw))
             .with_scale(Vec3::splat(s)),
     )
+}
+
+/// Where a yard's sheds, rail panels, feeders and stacks go, per kind.
+struct YardParts {
+    sheds: Vec<Transform>,
+    open_sheds: Vec<Transform>,
+    rails: Vec<Transform>,
+    feeders: Vec<Transform>,
+    stacks: Vec<Transform>,
+}
+
+impl YardParts {
+    fn of(&self, kind: ClutterKind) -> &[Transform] {
+        match kind {
+            ClutterKind::Shed => &self.sheds,
+            ClutterKind::OpenShed => &self.open_sheds,
+            ClutterKind::Rail => &self.rails,
+            ClutterKind::Feeder => &self.feeders,
+            ClutterKind::Stack => &self.stacks,
+            _ => &[],
+        }
+    }
+}
+
+/// The yard's 3D parts: sheds scaled to their size and sunk to their lowest corner (local
+/// x along the row, z towards the pens), rails in 3 m panels (shorter to fit a run).
+fn yard_clutter(y: &Yard, terrain: &Terrain) -> YardParts {
+    let on_ground = |p: [f64; 2], turn: f64| {
+        let (x, z) = y.world(p);
+        Transform::from_xyz(x as f32, terrain.height(x, z) as f32, z as f32)
+            .with_rotation(Quat::from_rotation_y(y.yaw(turn) as f32))
+    };
+    let shed = |s: &Shed| {
+        let r = &s.rect;
+        let corners = [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)].map(|(a, b)| {
+            let (x, z) = y.world([r.c[0] + a * r.half[0], r.c[1] + b * r.half[1]]);
+            terrain.height(x, z)
+        });
+        let (x, z) = y.world(r.c);
+        let ground = terrain.height(x, z);
+        let base = corners.iter().copied().fold(ground, f64::min) - 0.5;
+        let top = ground + s.height;
+        Transform::from_xyz(x as f32, ((base + top) / 2.0) as f32, z as f32)
+            .with_rotation(Quat::from_rotation_y(y.yaw(0.0) as f32))
+            .with_scale(Vec3::new(
+                (2.0 * r.half[0]) as f32,
+                (top - base) as f32,
+                (2.0 * r.half[1]) as f32,
+            ))
+    };
+    let mut rails = Vec::new();
+    for (p, q) in y.rail_runs() {
+        let (du, dv) = (q[0] - p[0], q[1] - p[1]);
+        let len = du.hypot(dv);
+        let n = (len / RAIL_M).ceil().max(1.0) as usize;
+        let turn = dv.atan2(du);
+        for k in 0..n {
+            let f = (k as f64 + 0.5) / n as f64;
+            let tf = on_ground([p[0] + du * f, p[1] + dv * f], turn);
+            rails.push(tf.with_scale(Vec3::new((len / n as f64 / RAIL_M) as f32, 1.0, 1.0)));
+        }
+    }
+    YardParts {
+        sheds: y.sheds.iter().filter(|s| !s.open).map(shed).collect(),
+        open_sheds: y.sheds.iter().filter(|s| s.open).map(shed).collect(),
+        rails,
+        feeders: y.feeders.iter().map(|&(p, t)| on_ground(p, t)).collect(),
+        stacks: y.stacks.iter().map(|&(p, t)| on_ground(p, t)).collect(),
+    }
+}
+
+/// Moves the shot's bodies into the yard: the whole herd most of the time, else only those
+/// that landed on a building. Most of the herd packs into one area (a pen, the front of an
+/// open shed, the mud), the rest anywhere in the yard; centres at least 1.4 m apart.
+fn yard_herd(rng: &mut Rng, y: &Yard, terrain: &Terrain, targets: &mut [Option<Placement>]) {
+    let areas = y.herd_areas();
+    if areas.is_empty() {
+        return;
+    }
+    let pick_area = |rng: &mut Rng| {
+        let total: f64 = areas.iter().map(|a| a.0).sum();
+        let mut u = rng.unit() * total;
+        for (w, a) in &areas {
+            if u < *w {
+                return *a;
+            }
+            u -= w;
+        }
+        areas[areas.len() - 1].1
+    };
+    let all = rng.chance(YARD_HERD);
+    let home = pick_area(rng);
+    let mut taken: Vec<(f64, f64)> = Vec::new();
+    for p in targets.iter_mut().flatten() {
+        let t = p.transform.translation;
+        let (x, z) = (t.x as f64, t.z as f64);
+        if !all && !y.blocks(x, z) {
+            continue;
+        }
+        let area = if rng.chance(0.8) {
+            home
+        } else {
+            pick_area(rng)
+        };
+        let spot = (0..12)
+            .map(|k| {
+                // a full area overflows into the rest of the yard
+                let a = if k < 8 { area } else { pick_area(rng) };
+                y.spot_in(rng, &a)
+            })
+            .find(|s| taken.iter().all(|q| (q.0 - s.0).hypot(q.1 - s.1) > 1.4));
+        let Some((sx, sz)) = spot else { continue };
+        // keep its pose: lying bodies stay as far into the ground
+        let lift = t.y as f64 - terrain.height(x, z);
+        p.transform.translation =
+            Vec3::new(sx as f32, (terrain.height(sx, sz) + lift) as f32, sz as f32);
+        taken.push((sx, sz));
+    }
 }
 
 /// Which pool targets are in a shot: ~30% empty frames (like the real data), else a group
@@ -1143,6 +1339,8 @@ pub fn spawn_scene(
 
     let block = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
     let cylinder = meshes.add(Cylinder::new(0.5, 1.0));
+    let hoop = meshes.add(Torus::new(0.94, 1.06));
+    let tyre = meshes.add(Torus::new(0.25, 0.51));
     let mut shapes = Rng::new(world.seed ^ 0x5_4A9E);
     let canopies: Vec<_> = (0..8)
         .map(|_| meshes.add(lumpy_blob(&mut shapes, 0.35, 0.3)))
@@ -1159,6 +1357,7 @@ pub fn spawn_scene(
             0.25,
         )))
     });
+    let sheets = rgb.then(|| images.add(texture_image(sheet_texture(world.seed ^ 0x5EE7))));
     let mut clutter = Vec::new();
     for &(kind, n) in modality.clutter() {
         let set: Vec<_> = (0..CLUTTER_MATS)
@@ -1169,6 +1368,9 @@ pub fn spawn_scene(
                     let t = foliage.clone().unwrap_or_else(|| texture.clone());
                     mats.get_mut(&m).unwrap().base_color_texture = Some(t);
                 }
+                if matches!(kind, ClutterKind::Shed | ClutterKind::OpenShed) {
+                    mats.get_mut(&m).unwrap().base_color_texture = sheets.clone();
+                }
                 m
             })
             .collect();
@@ -1178,6 +1380,8 @@ pub fn spawn_scene(
                 stones: &stones,
                 block: &block,
                 cylinder: &cylinder,
+                hoop: &hoop,
+                tyre: &tyre,
             };
             let parts = clutter_parts(&mut shapes, kind, &shapes_of);
             commands
@@ -1438,6 +1642,9 @@ struct ClutterShapes<'a> {
     /// Unit cube and unit cylinder (radius 0.5, height 1).
     block: &'a Handle<Mesh>,
     cylinder: &'a Handle<Mesh>,
+    /// A ring feeder's hoop (1 m radius) and a tyre (0.38 m), lying flat.
+    hoop: &'a Handle<Mesh>,
+    tyre: &'a Handle<Mesh>,
 }
 
 /// Parts of one clutter instance in unit space (the shot scales the whole thing; bales
@@ -1458,7 +1665,151 @@ fn clutter_parts(
         ..
     } = *shapes;
     let half = CLUTTER_MATS / 2;
+    let b = |x: f32, y: f32, z: f32, sx: f32, sy: f32, sz: f32, m: usize| {
+        (
+            block.clone(),
+            Transform::from_xyz(x, y, z).with_scale(Vec3::new(sx, sy, sz)),
+            m,
+        )
+    };
     match kind {
+        ClutterKind::Shed | ClutterKind::OpenShed => {
+            // unit box (the shot scales it), x along the row, +z towards the pens; a
+            // low-pitched roof in two halves along the ridge, some with lighter roof lights
+            let (roof, wall) = (rng.index(half), half + rng.index(half));
+            let pitch = rng.range(0.06, 0.14) as f32;
+            let mut parts = vec![
+                (
+                    block.clone(),
+                    Transform::from_xyz(0.0, 0.47, -0.25)
+                        .with_rotation(Quat::from_rotation_x(pitch))
+                        .with_scale(Vec3::new(1.02, 0.03, 0.53)),
+                    roof,
+                ),
+                (
+                    block.clone(),
+                    Transform::from_xyz(0.0, 0.47, 0.25)
+                        .with_rotation(Quat::from_rotation_x(-pitch))
+                        .with_scale(Vec3::new(1.02, 0.03, 0.53)),
+                    roof,
+                ),
+            ];
+            if rng.chance(0.4) {
+                let light = (roof + 1 + rng.index(half - 1)) % half;
+                let n = 3 + rng.index(6);
+                for k in 0..n {
+                    let x = (k as f32 + 0.5) / n as f32 - 0.5;
+                    let z = if rng.chance(0.5) { 0.25 } else { -0.25 };
+                    let tilt = if z > 0.0 { -pitch } else { pitch };
+                    parts.push((
+                        block.clone(),
+                        Transform::from_xyz(x, 0.49, z)
+                            .with_rotation(Quat::from_rotation_x(tilt))
+                            .with_scale(Vec3::new(0.02, 0.03, 0.4)),
+                        light,
+                    ));
+                }
+            }
+            if kind == ClutterKind::Shed {
+                parts.push(b(0.0, -0.03, 0.0, 0.98, 0.94, 0.98, wall));
+            } else {
+                // back wall, side walls with an open gap above, posts along the front
+                parts.push(b(0.0, -0.05, -0.49, 0.98, 0.9, 0.02, wall));
+                for x in [-0.49, 0.49] {
+                    parts.push(b(x, -0.2, -0.1, 0.02, 0.6, 0.78, wall));
+                }
+                let n = 4 + rng.index(5);
+                for k in 0..=n {
+                    let x = k as f32 / n as f32 - 0.5;
+                    parts.push(b(x * 0.98, -0.03, 0.48, 0.012, 0.94, 0.02, wall));
+                }
+            }
+            parts
+        }
+        ClutterKind::Rail => {
+            // a 3 m panel along local x (metres): posts at the ends, two or three rails
+            let m = rng.index(CLUTTER_MATS);
+            let len = RAIL_M as f32;
+            let mut parts = vec![
+                b(-len / 2.0, 0.65, 0.0, 0.1, 1.3, 0.1, m),
+                b(len / 2.0, 0.65, 0.0, 0.1, 1.3, 0.1, m),
+            ];
+            let rails: &[f32] = if rng.chance(0.6) {
+                &[0.45, 0.8, 1.15]
+            } else {
+                &[0.6, 1.1]
+            };
+            for &y in rails {
+                parts.push(b(0.0, y, 0.0, len, 0.07, 0.07, m));
+            }
+            parts
+        }
+        ClutterKind::Feeder => {
+            let (metal, fodder) = (rng.index(half), half + rng.index(half));
+            let u = rng.unit();
+            if u < 0.5 {
+                // ring feeder round a bale of hay
+                vec![
+                    (
+                        shapes.hoop.clone(),
+                        Transform::from_xyz(0.0, 0.9, 0.0),
+                        metal,
+                    ),
+                    (
+                        shapes.hoop.clone(),
+                        Transform::from_xyz(0.0, 0.3, 0.0),
+                        metal,
+                    ),
+                    (
+                        shapes.cylinder.clone(),
+                        Transform::from_xyz(0.0, 0.5, 0.0).with_scale(Vec3::new(1.5, 1.0, 1.5)),
+                        fodder,
+                    ),
+                ]
+            } else if u < 0.85 {
+                // trough
+                vec![b(0.0, 0.3, 0.0, 3.0, 0.5, 0.65, metal)]
+            } else {
+                // water tank
+                vec![(
+                    shapes.cylinder.clone(),
+                    Transform::from_xyz(0.0, 0.45, 0.0).with_scale(Vec3::new(1.6, 0.9, 1.6)),
+                    fodder,
+                )]
+            }
+        }
+        ClutterKind::Stack => {
+            let (film, rubber) = (rng.index(half), half + rng.index(half));
+            let u = rng.unit();
+            if u < 0.7 {
+                // a wrapped bale, lying along the row or on end
+                let tf = if rng.chance(0.6) {
+                    Transform::from_xyz(0.0, 0.62, 0.0)
+                        .with_rotation(Quat::from_rotation_z(FRAC_PI_2))
+                        .with_scale(Vec3::new(1.25, 1.2, 1.25))
+                } else {
+                    Transform::from_xyz(0.0, 0.6, 0.0).with_scale(Vec3::new(1.25, 1.2, 1.25))
+                };
+                vec![(shapes.cylinder.clone(), tf, film)]
+            } else if u < 0.9 {
+                // a stack of tyres
+                (0..2 + rng.index(4))
+                    .map(|k| {
+                        (
+                            shapes.tyre.clone(),
+                            Transform::from_xyz(0.0, 0.12 + 0.24 * k as f32, 0.0),
+                            rubber,
+                        )
+                    })
+                    .collect()
+            } else {
+                // a tank in its cage
+                vec![
+                    b(0.0, 0.6, 0.0, 1.0, 1.0, 1.2, film),
+                    b(0.0, 0.08, 0.0, 1.1, 0.16, 1.3, rubber),
+                ]
+            }
+        }
         ClutterKind::Hedge => {
             // 2-3 canopy blobs along local x, overlapping into one ragged segment
             let k = 2 + rng.index(2);
@@ -2011,10 +2362,10 @@ impl SceneCtl<'_, '_> {
             .zip(RGB_CLUTTER.iter())
         {
             // canopies carry the foliage texture, so they make up for its base
-            let gain = if matches!(kind, ClutterKind::Bush | ClutterKind::Hedge) {
-                texture_gain()
-            } else {
-                1.0
+            let gain = match kind {
+                ClutterKind::Bush | ClutterKind::Hedge => texture_gain(),
+                ClutterKind::Shed | ClutterKind::OpenShed => SHEET_GAIN,
+                _ => 1.0,
             };
             for (h, &c) in set.iter().zip(colours) {
                 if let Some(mut m) = self.mats.get_mut(h) {
@@ -2058,6 +2409,30 @@ impl SceneCtl<'_, '_> {
 fn rgba(grey: &[u8]) -> Vec<u8> {
     grey.iter().flat_map(|&g| [g, g, g, 255]).collect()
 }
+
+/// Weathered sheeting for shed roofs and walls (grey, sRGB, TEX_SIZE square, tiling):
+/// sheets with a darker seam between them, each a little lighter or darker, faint streaks
+/// down them, and broad dirt and lichen. Mean about `1 / SHEET_GAIN` (linear).
+fn sheet_texture(seed: u64) -> Vec<u8> {
+    let n = TEX_SIZE;
+    let sheet = 32;
+    let mut out = Vec::with_capacity(n * n);
+    for j in 0..n {
+        for i in 0..n {
+            let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
+            let seam = if i % sheet == 0 { 0.8 } else { 1.0 };
+            let tone = 0.95 + 0.1 * (crate::rng::lattice(seed, (i / sheet) as i64, 0) - 0.5);
+            let streak = 1.0 + 0.06 * (crate::rng::lattice(seed ^ 1, i as i64, 0) - 0.5);
+            let dirt = (crate::thermal::tiling_fbm(seed ^ 2, u, v, 3.0) + 0.2).clamp(0.0, 1.0);
+            let lin = 0.95 * seam * tone * streak * (1.0 - 0.25 * dirt);
+            out.push((rgb::linear_to_srgb(lin.clamp(0.0, 1.0) as f32) * 255.0).round() as u8);
+        }
+    }
+    out
+}
+
+/// Undoes `sheet_texture`'s darkening on the base colour.
+const SHEET_GAIN: f32 = 1.15;
 
 fn texture_image(grey: Vec<u8>) -> Image {
     let mut img = Image::new(
@@ -2264,6 +2639,56 @@ mod tests {
         assert!((36..60).contains(&nadir), "{nadir} nadir of 60");
         assert!((6..=36).contains(&empty), "{empty} empty of 60");
         assert_eq!(bales_off_stubble, 0);
+    }
+
+    #[test]
+    fn yard_shots_put_herds_in_pens_and_keep_clutter_out() {
+        let world = World::new(3);
+        let kinds = Modality::Rgb.kinds();
+        let mut rng = Rng::new(11);
+        let m = Modality::Rgb;
+        let (mut yards, mut herds, mut in_yard, mut bodies) = (0, 0, 0, 0);
+        for _ in 0..80 {
+            let s = Shot::random(&mut rng, &world, &kinds, &[], 0.0, m);
+            let Some(y) = s.rgb.as_ref().unwrap().ground.layout.yard.as_ref() else {
+                continue;
+            };
+            yards += 1;
+            let sheds = s.clutter[m.clutter_index(ClutterKind::Shed)]
+                .iter()
+                .flatten()
+                .count()
+                + s.clutter[m.clutter_index(ClutterKind::OpenShed)]
+                    .iter()
+                    .flatten()
+                    .count();
+            assert_eq!(sheds, y.sheds.len());
+            for kind in [ClutterKind::Bush, ClutterKind::House, ClutterKind::Hedge] {
+                for t in s.clutter[m.clutter_index(kind)].iter().flatten() {
+                    assert!(!y.covers(t.translation.x as f64, t.translation.z as f64));
+                }
+            }
+            let n = s.n_targets();
+            if n > 0 {
+                herds += 1;
+                bodies += n;
+                in_yard += s
+                    .targets
+                    .iter()
+                    .flatten()
+                    .filter(|p| {
+                        y.holds(
+                            p.transform.translation.x as f64,
+                            p.transform.translation.z as f64,
+                        )
+                    })
+                    .count();
+            }
+        }
+        assert!((15..45).contains(&yards), "{yards} yards in 80 shots");
+        assert!(herds > 5);
+        // most bodies of a yard shot stand in it
+        assert!(in_yard * 2 > bodies, "{in_yard} of {bodies} in the yard");
     }
 
     #[test]
