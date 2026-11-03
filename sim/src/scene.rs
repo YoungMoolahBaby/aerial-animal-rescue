@@ -38,7 +38,7 @@ use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
 use crate::world::Terrain;
-use crate::yard::{Shed, Yard};
+use crate::yard::{FEEDS, Feed, Shed, Yard};
 
 /// Frame size of the thermal cameras in our real data (HIT-UAV, most BIRDSAI flights).
 pub const IMAGE_W: u32 = 640;
@@ -183,6 +183,8 @@ const RAIL_M: f64 = 3.0;
 /// Share of yard shots whose whole herd is in the yard (else only bodies that landed on a
 /// building move there).
 const YARD_HERD: f64 = 0.8;
+/// Share of yard herds that pack close and line up (`Yard::herd_slots`), else scattered.
+const YARD_PACKED: f64 = 0.85;
 
 /// What the pool of bodies holds; datagen picks from it per shot.
 pub const POOL: [(Kind, usize); 10] = [
@@ -579,7 +581,13 @@ impl Shot {
         let spread = altitude_m * (vfov_deg / 2.0).to_radians().tan();
         let near = |rng: &mut Rng, r: f64| (aim[0] + rng.range(-r, r), aim[2] + rng.range(-r, r));
 
-        let chosen = choose_targets(rng, kinds);
+        // the RGB ground first: a farmyard in it changes the herd (thermal draws nothing)
+        let ground = (!thermal).then(|| {
+            let (centre, size) = footprint(&camera, vfov_deg, aim[1]);
+            Ground::random(rng, centre, size)
+        });
+        let layout = ground.as_ref().map(|g| &g.layout);
+        let chosen = choose_targets(rng, kinds, layout.is_some_and(|l| l.yard.is_some()));
         let (cx, cz) = near(rng, 0.7 * spread);
         let group_r = rng.range(2.0, 0.8 * spread);
         let targets = kinds
@@ -605,16 +613,11 @@ impl Shot {
             })
             .collect();
 
-        let ground = (!thermal).then(|| {
-            let (centre, size) = footprint(&camera, vfov_deg, aim[1]);
-            Ground::random(rng, centre, size)
-        });
-        let layout = ground.as_ref().map(|g| &g.layout);
         let stubble =
             layout.is_some_and(|l| l.parcels.iter().any(|p| p.field == rgb::Field::Stubble));
-        // nothing else stands in a farmyard (vehicles may park on its hard standing)
+        // nothing else stands in a farmyard or its mud (vehicles may park on its hard standing)
         let yard = layout.and_then(|l| l.yard.as_ref());
-        let in_yard = |x: f64, z: f64| yard.is_some_and(|y| y.covers(x, z));
+        let in_yard = |x: f64, z: f64| yard.is_some_and(|y| y.holds(x, z));
         let hedges: Vec<_> = layout
             .map_or_else(Vec::new, |l| l.hedge_segments(rng, RGB_HEDGES))
             .into_iter()
@@ -637,7 +640,7 @@ impl Shot {
                 | ClutterKind::OpenShed
                 | ClutterKind::Rail
                 | ClutterKind::Feeder
-                | ClutterKind::Stack => yard_parts.as_ref().map_or(0, |p| p.of(kind).len()),
+                | ClutterKind::Stack => yard_parts.as_ref().map_or(0, |p| p.count(kind)),
             };
             let placed: Vec<Option<Transform>> = (0..max)
                 .map(|i| {
@@ -661,7 +664,7 @@ impl Shot {
                         | ClutterKind::Rail
                         | ClutterKind::Feeder
                         | ClutterKind::Stack => {
-                            return yard_parts.as_ref()?.of(kind).get(i).copied();
+                            return yard_parts.as_ref()?.at(kind, i);
                         }
                         _ => {}
                     }
@@ -759,7 +762,7 @@ impl Shot {
 
         let mut targets: Vec<Option<Placement>> = targets;
         if let Some(y) = yard {
-            yard_herd(rng, y, terrain, &mut targets);
+            yard_herd(rng, y, terrain, kinds, &mut targets);
         }
         // Faint shots draw from a stream of their own (seeded by where the camera looks),
         // so every other draw, and the shots after, stay as they were.
@@ -965,21 +968,51 @@ struct YardParts {
     sheds: Vec<Transform>,
     open_sheds: Vec<Transform>,
     rails: Vec<Transform>,
-    feeders: Vec<Transform>,
+    /// By mesh slot: `yard::FEEDS` in order (ring feeders, troughs, tanks); empty slots
+    /// are `None`.
+    feeders: Vec<Option<Transform>>,
     stacks: Vec<Transform>,
 }
 
 impl YardParts {
-    fn of(&self, kind: ClutterKind) -> &[Transform] {
+    /// How many meshes of `kind` the shot may place.
+    fn count(&self, kind: ClutterKind) -> usize {
         match kind {
-            ClutterKind::Shed => &self.sheds,
-            ClutterKind::OpenShed => &self.open_sheds,
-            ClutterKind::Rail => &self.rails,
-            ClutterKind::Feeder => &self.feeders,
-            ClutterKind::Stack => &self.stacks,
-            _ => &[],
+            ClutterKind::Shed => self.sheds.len(),
+            ClutterKind::OpenShed => self.open_sheds.len(),
+            ClutterKind::Rail => self.rails.len(),
+            ClutterKind::Feeder => self.feeders.len(),
+            ClutterKind::Stack => self.stacks.len(),
+            _ => 0,
         }
     }
+
+    fn at(&self, kind: ClutterKind, i: usize) -> Option<Transform> {
+        match kind {
+            ClutterKind::Shed => self.sheds.get(i).copied(),
+            ClutterKind::OpenShed => self.open_sheds.get(i).copied(),
+            ClutterKind::Rail => self.rails.get(i).copied(),
+            ClutterKind::Feeder => self.feeders.get(i).copied().flatten(),
+            ClutterKind::Stack => self.stacks.get(i).copied(),
+            _ => None,
+        }
+    }
+}
+
+/// A yard's feeders by mesh slot: each kind in its own block of slots (`yard::FEEDS`).
+fn feeder_slots(y: &Yard, on_ground: impl Fn([f64; 2], f64) -> Transform) -> Vec<Option<Transform>> {
+    let mut slots = Vec::new();
+    for (feed, max) in FEEDS {
+        let mut these: Vec<Option<Transform>> = y
+            .feeders
+            .iter()
+            .filter(|f| f.2 == feed)
+            .map(|f| Some(on_ground(f.0, f.1)))
+            .collect();
+        these.resize(max, None);
+        slots.extend(these);
+    }
+    slots
 }
 
 /// The yard's 3D parts: sheds scaled to their size and sunk to their lowest corner (local
@@ -1024,15 +1057,23 @@ fn yard_clutter(y: &Yard, terrain: &Terrain) -> YardParts {
         sheds: y.sheds.iter().filter(|s| !s.open).map(shed).collect(),
         open_sheds: y.sheds.iter().filter(|s| s.open).map(shed).collect(),
         rails,
-        feeders: y.feeders.iter().map(|&(p, t)| on_ground(p, t)).collect(),
+        feeders: feeder_slots(y, on_ground),
         stacks: y.stacks.iter().map(|&(p, t)| on_ground(p, t)).collect(),
     }
 }
 
 /// Moves the shot's bodies into the yard: the whole herd most of the time, else only those
 /// that landed on a building. Most of the herd packs into one area (a pen, the front of an
-/// open shed, the mud), the rest anywhere in the yard; centres at least 1.4 m apart.
-fn yard_herd(rng: &mut Rng, y: &Yard, terrain: &Terrain, targets: &mut [Option<Placement>]) {
+/// open shed, the mud): usually close and lined up (`Yard::herd_slots`: heads in round a
+/// ring feeder, rows facing a rail), else scattered; the rest anywhere in the yard, centres
+/// at least 1.4 m apart. People never take a packed slot.
+fn yard_herd(
+    rng: &mut Rng,
+    y: &Yard,
+    terrain: &Terrain,
+    kinds: &[Kind],
+    targets: &mut [Option<Placement>],
+) {
     let areas = y.herd_areas();
     if areas.is_empty() {
         return;
@@ -1050,37 +1091,65 @@ fn yard_herd(rng: &mut Rng, y: &Yard, terrain: &Terrain, targets: &mut [Option<P
     };
     let all = rng.chance(YARD_HERD);
     let home = pick_area(rng);
-    let mut taken: Vec<(f64, f64)> = Vec::new();
-    for p in targets.iter_mut().flatten() {
+    let n = targets.iter().flatten().count();
+    let slots = if rng.chance(YARD_PACKED) {
+        y.herd_slots(rng, &home, n)
+    } else {
+        Vec::new()
+    };
+    let mut free = slots.iter();
+    // packed cows are placed exactly; everyone else keeps clear of all the slots
+    let mut taken: Vec<(f64, f64)> = slots.iter().map(|s| y.world(s.p)).collect();
+    for (&kind, p) in kinds.iter().zip(targets.iter_mut()) {
+        let Some(p) = p else { continue };
         let t = p.transform.translation;
         let (x, z) = (t.x as f64, t.z as f64);
         if !all && !y.blocks(x, z) {
             continue;
         }
-        let area = if rng.chance(0.8) {
-            home
-        } else {
-            pick_area(rng)
-        };
+        // keep its pose: lying bodies stay as far into the ground
+        let lift = t.y as f64 - terrain.height(x, z);
+        let animal = kind != Kind::Person;
+        let home_bound = rng.chance(0.8);
+        if animal
+            && home_bound
+            && let Some(s) = free.next()
+        {
+            let (sx, sz) = y.world(s.p);
+            let lift = if s.stand { lift.max(0.0) } else { lift };
+            p.transform.translation =
+                Vec3::new(sx as f32, (terrain.height(sx, sz) + lift) as f32, sz as f32);
+            p.transform.rotation = facing(y, s.facing);
+            continue;
+        }
+        let area = if home_bound { home } else { pick_area(rng) };
         let spot = (0..12)
             .map(|k| {
                 // a full area overflows into the rest of the yard
                 let a = if k < 8 { area } else { pick_area(rng) };
                 y.spot_in(rng, &a)
             })
-            .find(|s| taken.iter().all(|q| (q.0 - s.0).hypot(q.1 - s.1) > 1.4));
+            .find(|s| {
+                let (u, v) = y.local(s.0, s.1);
+                y.off_feeders([u, v]) && taken.iter().all(|q| (q.0 - s.0).hypot(q.1 - s.1) > 1.4)
+            });
         let Some((sx, sz)) = spot else { continue };
-        // keep its pose: lying bodies stay as far into the ground
-        let lift = t.y as f64 - terrain.height(x, z);
         p.transform.translation =
             Vec3::new(sx as f32, (terrain.height(sx, sz) + lift) as f32, sz as f32);
         taken.push((sx, sz));
     }
 }
 
+/// Turn that points a body's front (+z) along yard direction `facing`.
+fn facing(y: &Yard, facing: f64) -> Quat {
+    Quat::from_rotation_y(y.yaw(facing - std::f64::consts::FRAC_PI_2) as f32)
+}
+
 /// Which pool targets are in a shot: ~30% empty frames (like the real data), else a group
-/// of people, a herd of one kind, or a mix.
-fn choose_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
+/// of people, a herd of one kind, or a mix. Herds in a farmyard are mostly cattle and run
+/// bigger (the larger of two draws): real yard cows stand in groups of 6 at the median, a third of them in 10 or
+/// more (train flights 060, 062, Derval 012/014).
+fn choose_targets(rng: &mut Rng, kinds: &[Kind], yard: bool) -> Vec<bool> {
     let u = rng.unit();
     if u < 0.3 {
         return vec![false; kinds.len()];
@@ -1105,8 +1174,17 @@ fn choose_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
                 animals.push(k);
             }
         }
-        let herd = animals[rng.index(animals.len())];
-        let n = 1 + rng.index(kinds.iter().filter(|&&k| k == herd).count());
+        // farmyards are mostly cattle yards
+        let herd = if yard && animals.contains(&Kind::Cattle) && rng.chance(0.7) {
+            Kind::Cattle
+        } else {
+            animals[rng.index(animals.len())]
+        };
+        let most = kinds.iter().filter(|&&k| k == herd).count();
+        let mut n = 1 + rng.index(most);
+        if yard {
+            n = n.max(1 + rng.index(most));
+        }
         let mut k = 0;
         return kinds
             .iter()
@@ -1374,7 +1452,7 @@ pub fn spawn_scene(
                 m
             })
             .collect();
-        for _ in 0..n {
+        for slot in 0..n {
             let shapes_of = ClutterShapes {
                 canopies: &canopies,
                 stones: &stones,
@@ -1383,7 +1461,7 @@ pub fn spawn_scene(
                 hoop: &hoop,
                 tyre: &tyre,
             };
-            let parts = clutter_parts(&mut shapes, kind, &shapes_of);
+            let parts = clutter_parts(&mut shapes, kind, slot, &shapes_of);
             commands
                 .spawn((Transform::default(), Visibility::Hidden, Clutter { kind }))
                 .with_children(|c| {
@@ -1656,6 +1734,7 @@ struct ClutterShapes<'a> {
 fn clutter_parts(
     rng: &mut Rng,
     kind: ClutterKind,
+    slot: usize,
     shapes: &ClutterShapes,
 ) -> Vec<(Handle<Mesh>, Transform, usize)> {
     let ClutterShapes {
@@ -1746,8 +1825,17 @@ fn clutter_parts(
         }
         ClutterKind::Feeder => {
             let (metal, fodder) = (rng.index(half), half + rng.index(half));
-            let u = rng.unit();
-            if u < 0.5 {
+            // which feeder is fixed by the slot, so the shot knows where the rings are
+            let mut feed = Feed::Tank;
+            let mut first = 0;
+            for (f, max) in FEEDS {
+                if slot < first + max {
+                    feed = f;
+                    break;
+                }
+                first += max;
+            }
+            if feed == Feed::Ring {
                 // ring feeder round a bale of hay
                 vec![
                     (
@@ -1766,7 +1854,7 @@ fn clutter_parts(
                         fodder,
                     ),
                 ]
-            } else if u < 0.85 {
+            } else if feed == Feed::Trough {
                 // trough
                 vec![b(0.0, 0.3, 0.0, 3.0, 0.5, 0.65, metal)]
             } else {
@@ -2639,6 +2727,21 @@ mod tests {
         assert!((36..60).contains(&nadir), "{nadir} nadir of 60");
         assert!((6..=36).contains(&empty), "{empty} empty of 60");
         assert_eq!(bales_off_stubble, 0);
+    }
+
+    #[test]
+    fn packed_cows_face_where_their_slot_says() {
+        let mut rng = Rng::new(3);
+        for _ in 0..20 {
+            let a = rng.range(0.0, std::f64::consts::TAU);
+            let y = Yard::random(&mut rng, [5.0, 7.0], [a.cos(), a.sin()]);
+            let f = rng.range(0.0, std::f64::consts::TAU);
+            let front = facing(&y, f) * Vec3::Z;
+            let (x0, z0) = y.world([0.0, 0.0]);
+            let (x1, z1) = y.world([f.cos(), f.sin()]);
+            assert!((front.x as f64 - (x1 - x0)).abs() < 1e-5);
+            assert!((front.z as f64 - (z1 - z0)).abs() < 1e-5);
+        }
     }
 
     #[test]

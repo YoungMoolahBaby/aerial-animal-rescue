@@ -904,6 +904,35 @@ dog, boar).
     - 061 yard cows go from 0-1 to 7 of 47 on both seeds; most of 061's gain is grass cows
       found more surely (58/59) and ranked better. Packed-stall cows remain the gap.
     - v4 is the RGB sim from here on.
+- RGB v5: packed yard herds (2026-11-03). Measured on the train flights' yards (060, 062,
+  Derval 012/014, Jalogny 058/059; every third frame; a cow is "yard" if the ring round its
+  box isn't green, so cows in tree shade count too): cows stand close and line up. In the
+  pictures: rosettes of 6-12 heads-in round ring feeders, rows side by side in pens and
+  along open-shed fronts, packed lines in tree shade. v4 spread them out with random
+  headings.
+  - `yard.rs`: feeders have a kind (ring, trough, tank; at most 6/4/2, each in fixed mesh
+    slots so the shot knows where the rings are). `Yard::herd_slots` gives a packed herd's
+    places: 70% of the time when the home area has a ring feeder, 7-10 standing places
+    round it, heads in (the rest bunch behind); else rows facing a pen edge (side gap
+    1.0-1.6 m, row gap 2.5-3.3 m, +-0.25 rad), looser on mud (1.3-2.0 m, +-0.6 rad, 30%
+    turned round). Slots keep off feeders and bay rails.
+  - `scene.rs`: 85% of yard herds pack (`YARD_PACKED`); people never take a slot;
+    scattered bodies keep off feeders. Yard herds are cattle 70% of the time and bigger
+    (the larger of two draws of the herd size). Nothing but the yard's own clutter stands
+    on its mud (a bush grew in one rosette). The RGB ground is drawn before the targets
+    now; thermal draws nothing there, and the 24-frame thermal check is byte-identical.
+  - Packing, nearest neighbour in body lengths and group size per cow (linked within 1.5
+    lengths); sim measured on frames whose bodies are all in the yard (the green test
+    misreads sim pens next to bright grass):
+
+      | | real train yards | v4 | v5 trial (400 frames) |
+      |---|---|---|---|
+      | NN median | 0.84 | 1.41 | 0.71 |
+      | NN < 0.8 / < 1.0 / < 1.5 | 44 / 70 / 79% | 16 / 27 / 54% | 57 / 67 / 81% |
+      | group: median, alone | 6, 23% | 2, 49% | 4, 21% |
+      | group >= 5 / >= 10 | 51 / 38% | 15 / 0% | 47 / 14% |
+
+    Groups of 10+ stay short of real (some real ones are tree-shade lines, not yards).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

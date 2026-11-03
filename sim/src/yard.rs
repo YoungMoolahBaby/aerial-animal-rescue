@@ -9,6 +9,10 @@
 //! front of them; a trampled muddy gateway into the field with ring feeders; a silage
 //! clamp under black plastic held down by tyres; a manure heap; wrapped bales.
 //!
+//! Herds in a yard pack close and line up as they do there (RGB v5, `Yard::herd_slots`):
+//! heads in round a ring feeder, side by side in rows facing a rail, a looser bunch on the
+//! mud.
+//!
 //! The yard has its own frame: u along the shed row (the field grid's angle), v away from
 //! the sheds towards the pens. Sheds sit at v < 0, pens at v > 0.
 
@@ -76,6 +80,31 @@ pub struct Pen {
     pub gate: (f64, f64),
 }
 
+/// What feeds or waters the cows: a ring feeder round a bale (1 m radius), a 3 m trough,
+/// a round water tank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Feed {
+    Ring,
+    Trough,
+    Tank,
+}
+
+/// How many of each feeder a yard can have: the scene builds this many meshes of each, in
+/// this order.
+pub const FEEDS: [(Feed, usize); 3] = [(Feed::Ring, 6), (Feed::Trough, 4), (Feed::Tank, 2)];
+
+/// Hoop radius of a ring feeder, metres.
+pub const RING_R: f64 = 1.0;
+
+/// Where one cow of a packed herd goes: yard-frame spot, the yard direction its head
+/// faces, and whether it must stand (heads in a ring feeder).
+#[derive(Clone, Copy, Debug)]
+pub struct Slot {
+    pub p: [f64; 2],
+    pub facing: f64,
+    pub stand: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct Shed {
     pub rect: Rect,
@@ -133,8 +162,8 @@ pub struct Yard {
     pub clamp: Option<Rect>,
     /// Manure heap: stretched along u.
     pub heap: Option<Mud>,
-    /// Ring feeders and troughs (yard frame, turn).
-    pub feeders: Vec<([f64; 2], f64)>,
+    /// Ring feeders, troughs and water tanks (yard frame, turn, which).
+    pub feeders: Vec<([f64; 2], f64, Feed)>,
     /// Wrapped bales, tyre stacks, tanks lined up by the buildings (yard frame, turn).
     pub stacks: Vec<([f64; 2], f64)>,
     colours: Colours,
@@ -274,20 +303,35 @@ impl Yard {
             stretch: rng.range(2.0, 4.0),
             dir: PI / 2.0 + rng.range(-0.2, 0.2),
         });
+        // ring feeders mostly in the mud, troughs and tanks in the pens; no more of each
+        // than the scene has meshes for (`FEEDS`)
         let mut feeders = Vec::new();
         for m in &mud {
             for _ in 0..rng.index(3) {
                 let (a, d) = (rng.range(0.0, TAU), rng.range(0.0, 0.6) * m.r);
+                let feed = pick(rng, &[(0.8, Feed::Ring), (0.2, Feed::Trough)]);
                 feeders.push((
                     [m.c[0] + d * a.cos(), m.c[1] + d * a.sin()],
                     rng.range(0.0, TAU),
+                    feed,
                 ));
             }
         }
         for p in &pens {
             if rng.chance(0.4) {
-                feeders.push((p.rect.spot(rng, 1.5), rng.range(0.0, TAU)));
+                let feed = pick(
+                    rng,
+                    &[(0.4, Feed::Ring), (0.45, Feed::Trough), (0.15, Feed::Tank)],
+                );
+                feeders.push((p.rect.spot(rng, 1.5), rng.range(0.0, TAU), feed));
             }
+        }
+        for (feed, max) in FEEDS {
+            let mut k = 0;
+            feeders.retain(|f| {
+                k += (f.2 == feed) as usize;
+                f.2 != feed || k <= max
+            });
         }
         // wrapped bales in a row along the clamp or a shed's back
         let mut stacks = Vec::new();
@@ -448,6 +492,160 @@ impl Yard {
             }
         };
         self.world(p)
+    }
+
+    /// Up to `n` slots for a packed herd in `area`, in the order to fill them. Real yard
+    /// cows stand close and line up (train flights 060, 062, Derval 012/014: nearest
+    /// neighbour 0.84 body lengths, median group of 6): heads in round a ring feeder,
+    /// rows facing a pen's rail or feed barrier, a looser bunch on the mud. Fewer slots
+    /// than `n` when the area is full.
+    pub fn herd_slots(&self, rng: &mut Rng, area: &Area, n: usize) -> Vec<Slot> {
+        let rings: Vec<[f64; 2]> = self
+            .feeders
+            .iter()
+            .filter(|f| f.2 == Feed::Ring && self.area_has(area, f.0))
+            .map(|f| f.0)
+            .collect();
+        if !rings.is_empty() && rng.chance(0.7) {
+            let c = rings[rng.index(rings.len())];
+            let mut slots = self.rosette(rng, c, n);
+            if slots.len() < n {
+                // the rest bunch up behind them
+                let more = self.rows(rng, &Area::Rect(Rect { c, half: [6.0, 6.0] }, 0.0), n);
+                slots.extend(more.into_iter().filter(|s| {
+                    (s.p[0] - c[0]).hypot(s.p[1] - c[1]) > RING_R + 2.6
+                        && self.area_has(area, s.p)
+                }));
+                slots.truncate(n);
+            }
+            return slots;
+        }
+        self.rows(rng, area, n)
+    }
+
+    fn area_has(&self, area: &Area, p: [f64; 2]) -> bool {
+        match area {
+            Area::Rect(r, _) => r.contains(p[0], p[1], 0.0),
+            Area::Mud(m) => m.distance(p[0], p[1]) < m.r,
+        }
+    }
+
+    /// Standing cows round a ring feeder, heads in, from one side round: 7-10 places.
+    fn rosette(&self, rng: &mut Rng, c: [f64; 2], n: usize) -> Vec<Slot> {
+        let places = 7 + rng.index(4);
+        let start = rng.range(0.0, TAU);
+        // the body's centre: nose just inside the hoop
+        let r = RING_R + rng.range(1.0, 1.25);
+        (0..places.min(n))
+            .map(|k| {
+                let a = start + TAU * k as f64 / places as f64 + rng.range(-0.08, 0.08);
+                let r = r + rng.range(-0.15, 0.15);
+                Slot {
+                    p: [c[0] + r * a.cos(), c[1] + r * a.sin()],
+                    facing: a + PI + rng.range(-0.2, 0.2),
+                    stand: true,
+                }
+            })
+            .collect()
+    }
+
+    /// Rows of cows facing one way, filled from the edge they face (a rail, a barrier):
+    /// in a pen or shed front side by side 1.0-1.6 m apart, on mud looser and less lined
+    /// up. Clear of feeders and bay rails.
+    fn rows(&self, rng: &mut Rng, area: &Area, n: usize) -> Vec<Slot> {
+        let (rect, loose) = match area {
+            Area::Rect(r, _) => (*r, false),
+            Area::Mud(m) => {
+                let h = 0.6 * m.r;
+                (
+                    Rect {
+                        c: m.c,
+                        half: [h, h],
+                    },
+                    true,
+                )
+            }
+        };
+        // the way the heads face: a yard axis, mostly towards the sheds or away
+        let facing = pick(rng, &[(0.7, PI / 2.0), (0.3, 0.0)])
+            + if rng.chance(0.5) { PI } else { 0.0 };
+        let (sf, cf) = facing.sin_cos();
+        // along = how far forward (towards the edge faced), side = across
+        let along_u = cf.abs() > 0.5;
+        let (ha, hs) = if along_u {
+            (rect.half[0], rect.half[1])
+        } else {
+            (rect.half[1], rect.half[0])
+        };
+        let (a_max, s_max) = (ha - 1.3, hs - 0.6);
+        if a_max < 0.0 || s_max < 0.0 {
+            return Vec::new();
+        }
+        let (side_gap, row_gap, spin) = if loose {
+            (rng.range(1.3, 2.0), rng.range(2.6, 3.6), 0.6)
+        } else {
+            (rng.range(1.0, 1.6), rng.range(2.5, 3.3), 0.25)
+        };
+        let fwd = if along_u { cf.signum() } else { sf.signum() };
+        let shift = rng.range(0.0, side_gap);
+        let mut slots = Vec::new();
+        let mut a = a_max;
+        while a >= -a_max && slots.len() < n {
+            let mut s = -s_max + shift;
+            // rows nearer the front fill first; within a row, from a random side
+            let mut row = Vec::new();
+            while s <= s_max {
+                if !rng.chance(0.12) {
+                    let (aa, ss) = (
+                        a + rng.range(-0.3, 0.3),
+                        s + rng.range(-0.12, 0.12) * side_gap,
+                    );
+                    let (du, dv) = if along_u {
+                        (fwd * aa, ss)
+                    } else {
+                        (ss, fwd * aa)
+                    };
+                    let p = [rect.c[0] + du, rect.c[1] + dv];
+                    let flip = rng.chance(if loose { 0.3 } else { 0.1 });
+                    row.push(Slot {
+                        p,
+                        facing: facing + rng.range(-spin, spin) + if flip { PI } else { 0.0 },
+                        stand: false,
+                    });
+                }
+                s += side_gap;
+            }
+            if rng.chance(0.5) {
+                row.reverse();
+            }
+            slots.extend(row.into_iter().filter(|sl| self.clear(sl, along_u)));
+            a -= row_gap;
+        }
+        slots.truncate(n);
+        slots
+    }
+
+    /// Is a body at yard-frame `p` clear of the feeders?
+    pub fn off_feeders(&self, p: [f64; 2]) -> bool {
+        self.feeders.iter().all(|f| {
+            let d = (f.0[0] - p[0]).hypot(f.0[1] - p[1]);
+            d > match f.2 {
+                Feed::Ring => RING_R + 1.2,
+                Feed::Trough => 2.2,
+                Feed::Tank => 1.8,
+            }
+        })
+    }
+
+    /// Is a slot off the feeders and the pens' bay rails?
+    fn clear(&self, sl: &Slot, along_u: bool) -> bool {
+        let [u, v] = sl.p;
+        let feeders_ok = self.off_feeders(sl.p);
+        let half_u = if along_u { 1.3 } else { 0.5 };
+        let bays_ok = self.pens.iter().all(|p| {
+            !p.rect.contains(u, v, 0.0) || p.bays.iter().all(|b| (b - u).abs() > half_u)
+        });
+        feeders_ok && bays_ok
     }
 
     /// Rail panels along the pens' edges and bay dividers, with a gap for the gate:
@@ -612,6 +810,55 @@ impl Yard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_herds_face_the_feeder_or_line_up_without_overlapping() {
+        let mut rng = Rng::new(9);
+        let (mut rosettes, mut rows) = (0, 0);
+        for _ in 0..200 {
+            let a = rng.range(0.0, TAU);
+            let y = Yard::random(&mut rng, [0.0, 0.0], [a.cos(), a.sin()]);
+            for (feed, max) in FEEDS {
+                assert!(y.feeders.iter().filter(|f| f.2 == feed).count() <= max);
+            }
+            for (_, area) in y.herd_areas() {
+                let slots = y.herd_slots(&mut rng, &area, 12);
+                assert!(slots.len() <= 12);
+                for (i, s) in slots.iter().enumerate() {
+                    assert!(y.area_has(&area, s.p) || s.stand, "slot off its area");
+                    for t in &slots[..i] {
+                        // side by side at least a body's width apart
+                        let d = (s.p[0] - t.p[0]).hypot(s.p[1] - t.p[1]);
+                        assert!(d > 0.75, "slots {d:.2} m apart");
+                    }
+                }
+                if slots.first().is_some_and(|s| s.stand) {
+                    rosettes += 1;
+                    // the ring they all stand round (two rings can be close)
+                    let ring = y
+                        .feeders
+                        .iter()
+                        .filter(|f| f.2 == Feed::Ring)
+                        .map(|f| f.0)
+                        .find(|c| {
+                            slots.iter().filter(|s| s.stand).all(|s| {
+                                let d = (c[0] - s.p[0]).hypot(c[1] - s.p[1]);
+                                (RING_R + 0.8..RING_R + 1.45).contains(&d)
+                            })
+                        })
+                        .expect("a ring the cows stand round");
+                    for s in slots.iter().filter(|s| s.stand) {
+                        let to = (ring[1] - s.p[1]).atan2(ring[0] - s.p[0]);
+                        let off = (s.facing - to + PI).rem_euclid(TAU) - PI;
+                        assert!(off.abs() < 0.25, "head {off:.2} rad off the feeder");
+                    }
+                } else if slots.len() > 3 {
+                    rows += 1;
+                }
+            }
+        }
+        assert!(rosettes > 10 && rows > 50, "{rosettes} rosettes, {rows} rows");
+    }
 
     #[test]
     fn yards_hold_cows_rails_and_stay_within_reach() {
