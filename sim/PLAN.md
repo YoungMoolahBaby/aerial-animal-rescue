@@ -882,6 +882,28 @@ dog, boar).
     - (`evaluate.py`'s per-class cattle AP also counts cattle boxes on thermal frames;
       from here on the RGB-only `by_modality` number is the cattle figure. For v1-v3
       they were within 0.01; for v4 0.667 vs 0.729.)
+  - Scarce test with v4 (2026-11-03): the same 92 real RGB frames + all thermal, with the
+    4,000 v4 RGB sim images in place of v3; seeds 0 and 1, 60 epochs. RGB-only numbers on
+    val:
+
+      | | no sim (s0 / s1) | + v3 sim | + v4 sim |
+      |---|---|---|---|
+      | cattle AP50 (RGB) | .505 / .599 | .766 / .774 | .832 / .839 |
+      | flight 070 | .429 / .560 | .914 / .845 | .924 / .950 |
+      | flight 061 | .302 / .345 | .486 / .478 | .651 / .657 |
+      | flight 056 | .664 / .696 | .606 / .744 | .731 / .701 |
+      | flight 032 | .866 / .914 | .904 / .907 | .903 / .891 |
+      | recall / alarms per empty frame, conf 0.25 | .52-.63 / .18-.56 | .72-.78 / .035-.050 | .81-.82 / .050-.156 |
+      | recall / alarms, conf 0.5 | .45-.56 / .04-.16 | .61-.65 / .014-.021 | .68-.72 / .007-.014 |
+      | 061 cows found, grass / yard (of 59 / 47) | | 53-54 / 0-1 | 58 / 7 |
+      | thermal mAP50 | .516 / .441 | .440 / .462 | .442 / .443 |
+
+    - v4 beats v3 on both seeds: cattle +0.065 (seed noise 0.04, and the two seeds sit
+      within 0.01 of each other), 061 +0.17, recall +0.05-0.10 at both thresholds, with
+      alarms at the same low level. Thermal unchanged. Full-data real is about 0.91.
+    - 061 yard cows go from 0-1 to 7 of 47 on both seeds; most of 061's gain is grass cows
+      found more surely (58/59) and ranked better. Packed-stall cows remain the gap.
+    - v4 is the RGB sim from here on.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
