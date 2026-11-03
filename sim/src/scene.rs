@@ -1000,7 +1000,10 @@ impl YardParts {
 }
 
 /// A yard's feeders by mesh slot: each kind in its own block of slots (`yard::FEEDS`).
-fn feeder_slots(y: &Yard, on_ground: impl Fn([f64; 2], f64) -> Transform) -> Vec<Option<Transform>> {
+fn feeder_slots(
+    y: &Yard,
+    on_ground: impl Fn([f64; 2], f64) -> Transform,
+) -> Vec<Option<Transform>> {
     let mut slots = Vec::new();
     for (feed, max) in FEEDS {
         let mut these: Vec<Option<Transform>> = y

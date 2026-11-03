@@ -511,10 +511,19 @@ impl Yard {
             let mut slots = self.rosette(rng, c, n);
             if slots.len() < n {
                 // the rest bunch up behind them
-                let more = self.rows(rng, &Area::Rect(Rect { c, half: [6.0, 6.0] }, 0.0), n);
+                let more = self.rows(
+                    rng,
+                    &Area::Rect(
+                        Rect {
+                            c,
+                            half: [6.0, 6.0],
+                        },
+                        0.0,
+                    ),
+                    n,
+                );
                 slots.extend(more.into_iter().filter(|s| {
-                    (s.p[0] - c[0]).hypot(s.p[1] - c[1]) > RING_R + 2.6
-                        && self.area_has(area, s.p)
+                    (s.p[0] - c[0]).hypot(s.p[1] - c[1]) > RING_R + 2.6 && self.area_has(area, s.p)
                 }));
                 slots.truncate(n);
             }
@@ -567,8 +576,8 @@ impl Yard {
             }
         };
         // the way the heads face: a yard axis, mostly towards the sheds or away
-        let facing = pick(rng, &[(0.7, PI / 2.0), (0.3, 0.0)])
-            + if rng.chance(0.5) { PI } else { 0.0 };
+        let facing =
+            pick(rng, &[(0.7, PI / 2.0), (0.3, 0.0)]) + if rng.chance(0.5) { PI } else { 0.0 };
         let (sf, cf) = facing.sin_cos();
         // along = how far forward (towards the edge faced), side = across
         let along_u = cf.abs() > 0.5;
@@ -642,9 +651,10 @@ impl Yard {
         let [u, v] = sl.p;
         let feeders_ok = self.off_feeders(sl.p);
         let half_u = if along_u { 1.3 } else { 0.5 };
-        let bays_ok = self.pens.iter().all(|p| {
-            !p.rect.contains(u, v, 0.0) || p.bays.iter().all(|b| (b - u).abs() > half_u)
-        });
+        let bays_ok = self
+            .pens
+            .iter()
+            .all(|p| !p.rect.contains(u, v, 0.0) || p.bays.iter().all(|b| (b - u).abs() > half_u));
         feeders_ok && bays_ok
     }
 
@@ -857,7 +867,10 @@ mod tests {
                 }
             }
         }
-        assert!(rosettes > 10 && rows > 50, "{rosettes} rosettes, {rows} rows");
+        assert!(
+            rosettes > 10 && rows > 50,
+            "{rosettes} rosettes, {rows} rows"
+        );
     }
 
     #[test]
