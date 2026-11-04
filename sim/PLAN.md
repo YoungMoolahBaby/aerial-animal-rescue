@@ -933,6 +933,30 @@ dog, boar).
       | group >= 5 / >= 10 | 51 / 38% | 15 / 0% | 47 / 14% |
 
     Groups of 10+ stay short of real (some real ones are tree-shade lines, not yards).
+  - Scarce test with v5 (2026-11-03; same 92 real RGB frames + all thermal, 4,000 v5 sim
+    in place of v4, seeds 0 and 1):
+
+      | | + v4 sim (s0 / s1) | + v5 sim (s0 / s1) |
+      |---|---|---|
+      | cattle AP50 (RGB) | .832 / .839 | .792 / .812 |
+      | flight 070 | .924 / .950 | .904 / .972 |
+      | flight 061 | .651 / .657 | .573 / .663 |
+      | flight 056 | .731 / .701 | .659 / .486 |
+      | flight 032 | .903 / .891 | .925 / .933 |
+      | recall / alarms per empty frame, conf 0.5 | .68-.72 / .007-.014 | .60-.67 / 0-.007 |
+      | 061 cows found, grass / yard (of 59 / 47) | 58 / 7 | 52-56 / 2-6 |
+      | thermal mAP50 | .442 / .443 | .490 / .474 |
+      | best epoch (of run) | 23 (43) / 22 (42) | 11 (31) / 58 (60) |
+
+    - Not better: cattle -0.03 to -0.04 on both seeds (seed noise 0.04), and the yard cows
+      it was built for go down (2-6 vs 7 of 47). Fewer alarms, lower recall; 032 (bales)
+      up a little, 056 down on seed 1.
+    - Caveat: the checkpoint is picked on all-class fitness, and thermal moved (0.44 ->
+      0.48 with no thermal change), so which epoch was kept differs a lot (11 vs 58); the
+      RGB number carries that noise too.
+    - Kept in code (packing is closer to the real yards), but v4 stays the RGB pool for
+      training. Packing wasn't what kept 061's pen cows hidden; what's left there is
+      the look (lying under roof shade, cut by rails), with one val scene to judge it.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
