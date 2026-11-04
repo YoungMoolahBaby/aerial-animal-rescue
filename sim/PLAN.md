@@ -957,6 +957,32 @@ dog, boar).
     - Kept in code (packing is closer to the real yards), but v4 stays the RGB pool for
       training. Packing wasn't what kept 061's pen cows hidden; what's left there is
       the look (lying under roof shade, cut by rails), with one val scene to judge it.
+- Real thermal animals from BAMBI (2026-11-04). Until now real val had no thermal farm
+  or forest animals, so the thermal animal sim was never measured on real animals.
+  BAMBI (CC BY 4.0, nadir thermal video over Austrian forests, meadows and alpine
+  slopes; source `bambi` in configs/sources.yaml) has deer, boar, ibex, chamois and
+  people, with a published split that keeps places apart. Its val (37 flights, 648
+  frames, 2,485 animal and 189 person boxes, mostly 16-96 px) is the new measure.
+  Zero-shot on it, before any BAMBI training (runs/eval/bambi_zs/, not in git):
+
+      | model | animal AP50 | person AP50 | found IoU .5 small / medium (conf .1) | found IoU .1 | alarms / empty |
+      |---|---|---|---|---|---|
+      | hituav (real only) | .032 | .014 | .15 / .19 | .36 / .38 | 0 |
+      | split2 (real only, older split) | .050 | .011 | | | |
+      | sim_p3 (real + thermal sim v3) | .048 | .014 | | | |
+      | sim_p6 (real + thermal sim v6) | .052 | .012 | .17 / .23 | .41 / .40 | 0 |
+      | sim_p6_rgb3 / _s1 | .054 / .025 | .007 / .005 | | | |
+      | sim_only_p6 (sim only) | .071 | .000 | .20 / .37 | .51 / .57 | 12 (of 13) |
+
+    - Every model fails on BAMBI: the real thermal training data (BIRDSAI African nights,
+      HIT-UAV towns) is far from European forest. The thermal sim in mixed runs adds
+      nothing measurable (.03-.05, seed noise as large).
+    - Sim-only finds the most animals (medium .37 vs .19-.23), so the sim's scenes are
+      closer to BAMBI than the real data is, but it fires 12 times per empty frame, and
+      mixed with real data the gain is gone. Many hits are boxes of the wrong size
+      (found at IoU .1 is twice IoU .5).
+    - Next: train with BAMBI train (56 flights) and measure the sim where BAMBI is scarce,
+      as for RGB.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
