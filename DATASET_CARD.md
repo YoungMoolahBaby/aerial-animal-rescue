@@ -33,12 +33,14 @@ disasters.
 
 ## Dataset description
 
-The current build (2026-10-27, not yet released) has **14,023 real images** with
-48,942 boxes, from three third-party sources and no synthetic images yet: 9,852 thermal
-frames from BIRDSAI (70%), 2,795 thermal frames of people in towns and campuses from
-HIT-UAV (20%, train only), and 1,376 RGB drone photos of grazing cattle from ICAERUS (10%).
-It has no own footage, no flood scenes, and no pets or small livestock yet, so for now it
-covers people and wildlife in thermal and cattle on pasture in RGB.
+The current build (2026-11-04, not yet released) has **17,824 real images** with
+59,941 boxes, from four third-party sources and no synthetic images yet: 9,852 thermal
+frames from BIRDSAI (55%), 3,801 thermal frames of European forest wildlife from BAMBI
+(21%), 2,795 thermal frames of people in towns and campuses from HIT-UAV (16%, train
+only), and 1,376 RGB drone photos of grazing cattle from ICAERUS (8%).
+It has no own footage, no flood scenes, and almost no pets (26 dog boxes) or small
+livestock yet, so for now it covers people and wildlife in thermal and cattle on pasture
+in RGB.
 
 ## Classes
 
@@ -105,18 +107,23 @@ Counts for the current build (from `scripts/validate_dataset.py`):
 | | train | val | test | total |
 |---|---:|---:|---:|---:|
 | images, thermal (BIRDSAI) | 6,739 | 1,737 | 1,376 | 9,852 |
+| images, thermal (BAMBI) | 1,582 | 632 | 1,587 | 3,801 |
 | images, thermal (HIT-UAV) | 2,795 | | | 2,795 |
 | images, RGB (ICAERUS) | 986 | 197 | 193 | 1,376 |
-| **images** | **10,520** | **1,934** | **1,569** | **14,023** |
-| of which empty | 3,506 (33%) | 592 (31%) | 571 (36%) | 4,669 |
-| boxes, `person` (thermal) | 16,255 | 670 | 878 | 17,803 |
+| **images** | **12,102** | **2,566** | **3,156** | **17,824** |
+| of which empty | 3,519 (29%) | 605 (24%) | 600 (19%) | 4,724 |
+| boxes, `person` (thermal) | 16,381 | 859 | 941 | 18,181 |
 | of which HIT-UAV | 10,858 | | | 10,858 |
+| of which BAMBI | 126 | 189 | 63 | 378 |
+| boxes, `dog` (thermal, BAMBI) | 26 | | | 26 |
 | boxes, `cattle` (RGB) | 3,316 | 758 | 661 | 4,735 |
-| boxes, `other_animal` (thermal) | 18,908 | 5,341 | 2,155 | 26,404 |
-| **boxes** | **38,479** | **6,769** | **3,694** | **48,942** |
+| boxes, `other_animal` (thermal) | 24,324 | 7,744 | 4,931 | 36,999 |
+| of which BAMBI | 5,416 | 2,403 | 2,776 | 10,595 |
+| **boxes** | **44,047** | **9,361** | **6,533** | **59,941** |
 
-`dog`, `cat`, `horse` and `small_livestock` have no boxes yet. `other_animal` is heavy in
-val because one dense herd video (medium-size animals) could only go to one split.
+`cat`, `horse` and `small_livestock` have no boxes yet, and `dog` only 26 (BAMBI, train).
+BIRDSAI's `other_animal` is heavy in val because one dense herd video (medium-size
+animals) could only go to one split.
 
 ## Sources and licenses
 
@@ -163,7 +170,10 @@ Fill this from `configs/sources.yaml` for every source in this release.
     boar, ibex, chamois, birds, hybrid pigs and "Unknown" animals become `other_animal`,
     humans `person`, dogs `dog`. "No-animal" boxes (rocks and stumps that look like
     animals) are dropped, and their frames stay as hard negatives. Animals partly hidden
-    under canopy keep their box.
+    under canopy keep their box. Flight 221 is left out: it is a second processing of
+    flight 57 (same video, same animals). Several other flights are separate clips cut
+    from one recording; they share a split and their boxes don't overlap. Tracks stored
+    twice (identical boxes) are kept once.
 - **Synthetic:** segmented animal cutouts pasted onto disaster backgrounds, with random
   scale, rotation, brightness, blur, rain and noise. Labels come from the cutout masks.
 - **Annotation:** TODO (tool, guidelines, who annotated, how it was quality-checked).

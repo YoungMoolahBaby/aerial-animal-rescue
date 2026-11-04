@@ -221,7 +221,9 @@ sources:
       # Train flights at the 2 named places splits.json also uses for test
       # (Ktn_StoaniGatter_Bichl, Stm_Feldbach_StStefan; e.g. 295 flew the same day as test
       # 296-307). Left out so test stays on unseen places.
-      exclude_flights: [49, 51, 153, 157, 158, 159, 160, 161, 294, 295]
+      # 221 (val) is a second processing of 57 (same video, 453/458 boxes match).
+      # Other flights sharing a recording are different clips (~0 boxes match).
+      exclude_flights: [49, 51, 153, 157, 158, 159, 160, 161, 221, 294, 295]
     class_map:  # species column of <id>_gt.txt
       "Sus scrofa (Wild boar)": other_animal
       "Cervus elaphus (Red deer)": other_animal

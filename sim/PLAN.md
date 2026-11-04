@@ -981,7 +981,12 @@ dog, boar).
       closer to BAMBI than the real data is, but it fires 12 times per empty frame, and
       mixed with real data the gain is gone. Many hits are boxes of the wrong size
       (found at IoU .1 is twice IoU .5).
-    - Next: train with BAMBI train (56 flights) and measure the sim where BAMBI is scarce,
+    - Val above includes flight 221, found later to be a second processing of flight 57
+      (same video); it is now left out (val 36 flights, 632 frames, 2,403 animal boxes).
+      The 16 doubled frames don't change the picture.
+    - Full build (D:/aar/processed_bambi): real sources + BAMBI 1,582 train / 632 val /
+      1,587 test frames from 55 / 36 / 65 flights.
+    - Next: train with BAMBI train (55 flights) and measure the sim where BAMBI is scarce,
       as for RGB.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the

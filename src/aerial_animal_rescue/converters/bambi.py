@@ -70,7 +70,9 @@ def boxes_at(tracks: dict, frame: int) -> list[tuple[str, float, float, float, f
             species = a[5]
         else:
             continue
-        out.append((species, left, top, left + w, top + h))
+        box = (species, left, top, left + w, top + h)
+        if box not in out:  # a few tracks are stored twice (e.g. flight 284)
+            out.append(box)
     return out
 
 

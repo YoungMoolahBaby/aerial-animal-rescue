@@ -25,6 +25,11 @@ def test_boxes_at_interpolates_between_key_frames_only():
     assert boxes_at(tracks, 21) == []  # after the last
 
 
+def test_boxes_at_drops_tracks_stored_twice():
+    gt = "7,1,10,10,5,5,1,1,1.0,Dog\n7,2,10,10,5,5,1,1,1.0,Dog\n7,3,30,10,5,5,1,1,1.0,Dog\n"
+    assert boxes_at(read_tracks(gt), 7) == [("Dog", 10, 10, 15, 15), ("Dog", 30, 10, 35, 15)]
+
+
 def test_pick_frames_keeps_gap_then_caps():
     assert pick_frames([0, 10, 30, 59, 60, 61, 200], min_gap=60, max_n=10) == [0, 60, 200]
     assert pick_frames(list(range(0, 1000, 100)), min_gap=1, max_n=5) == [0, 200, 400, 600, 800]
