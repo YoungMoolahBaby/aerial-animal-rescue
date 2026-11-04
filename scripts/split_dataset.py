@@ -46,6 +46,9 @@ def main() -> None:
     train_only = sorted(n for n, s in load_sources().items() if s.raw.get("train_only"))
     if train_only:
         print("train only (sources.yaml):", ", ".join(train_only))
+    keep_split = sorted(n for n, s in load_sources().items() if s.raw.get("keep_source_split"))
+    if keep_split:
+        print("own split kept (sources.yaml):", ", ".join(keep_split))
     build_processed(
         pools,
         args.out,
@@ -56,6 +59,7 @@ def main() -> None:
         args.overwrite,
         None if args.train_empty_frac < 0 else args.train_empty_frac,
         train_only,
+        keep_split,
     )
 
 

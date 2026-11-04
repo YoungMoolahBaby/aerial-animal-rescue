@@ -209,3 +209,47 @@ def test_synthetic_images_are_kept_whole_and_not_counted_for_empties():
     alone = base.assign(split=assign_splits(base, seed=0))
     expected = sample_train_empty(alone, empty[~syn].reset_index(drop=True), frac=0.1, seed=0)
     assert keep[~syn].tolist() == expected.tolist()
+
+
+def kept_source(n_flights=9) -> pd.DataFrame:
+    extra = frame(n_flights=n_flights, frames_per_flight=4, n_synthetic=0).assign(source="extra")
+    extra["image_id"] = "x" + extra["image_id"]
+    flight = extra["sequence_id"].str[6:].astype(int)
+    extra["split"] = flight.map(lambda f: ("train", "val", "test")[f % 3])
+    return extra
+
+
+def test_keep_split_source_keeps_its_split_and_leaves_others_unchanged():
+    base = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    extra = kept_source()
+    df = pd.concat([base.assign(split=None), extra], ignore_index=True)
+    split = assign_splits(df, seed=0, keep_split=["extra"])
+    assert split[df["source"] == "extra"].tolist() == extra["split"].tolist()
+    assert split[df["source"] == "own"].tolist() == assign_splits(base, seed=0).tolist()
+
+
+def test_keep_split_source_is_not_counted_for_empties():
+    base = frame(n_flights=20, frames_per_flight=5, n_synthetic=0)
+    df = pd.concat([base.assign(split=None), kept_source()], ignore_index=True)
+    df["split"] = assign_splits(df, seed=0, keep_split=["extra"])
+    empty = pd.Series([k % 5 != 0 for k in range(len(df))], index=df.index)
+    keep = sample_train_empty(df, empty, frac=0.1, seed=0, keep_split=["extra"])
+    assert keep[df["source"] == "extra"].all()
+    alone = base.assign(split=assign_splits(base, seed=0))
+    own = (df["source"] == "own").to_numpy()
+    expected = sample_train_empty(alone, empty[own].reset_index(drop=True), frac=0.1, seed=0)
+    assert keep[own].tolist() == expected.tolist()
+
+
+def test_keep_split_rejects_missing_or_mixed_splits():
+    import pytest
+
+    extra = kept_source()
+    missing = extra.copy()
+    missing.loc[0, "split"] = None
+    with pytest.raises(ValueError, match="without a split"):
+        assign_splits(missing, seed=0, keep_split=["extra"])
+    mixed = extra.copy()
+    mixed.loc[1, "split"] = "val" if mixed.loc[1, "split"] != "val" else "test"
+    with pytest.raises(ValueError, match="spans several splits"):
+        assign_splits(mixed, seed=0, keep_split=["extra"])

@@ -13,6 +13,11 @@ size each come out close to the split ratios (see assign_splits).
 
 Empty images (no boxes) can be thinned out of train only: val and test keep
 all of them, since false alarms on empty frames are part of what we measure.
+
+Sources in `keep_split` come with their own split (the `split` column of their
+pool, e.g. a published split that also keeps flight LOCATIONS apart). Their
+images keep it and, like `train_only` sources, take no part in balancing or
+empty thinning, so adding one leaves every other source's images where they were.
 """
 
 import random
@@ -54,11 +59,14 @@ def assign_splits(
     group_by: str = "sequence",
     weights: pd.Series | pd.DataFrame | None = None,
     train_only: Iterable[str] = (),
+    keep_split: Iterable[str] = (),
 ) -> pd.Series:
     """Return a split name per row. Whole groups go to one split.
 
     Synthetic images and sources named in `train_only` always go to train and play no
     part in balancing, so adding such a source leaves val/test exactly as they were.
+    Sources in `keep_split` keep the split in their `split` column (checked: every
+    row must have one, and a sequence may not span two splits).
 
     `weights` gives every row a size (default 1 per image), or several sizes as
     DataFrame columns, e.g. images plus boxes per class and object size. Each
@@ -78,7 +86,19 @@ def assign_splits(
     synthetic = df["synthetic"].astype(bool)
     result = pd.Series("train", index=df.index, dtype=object)
 
-    real = ~synthetic & ~df["source"].isin(set(train_only))
+    kept = ~synthetic & df["source"].isin(set(keep_split))
+    if kept.any():
+        preset = df.loc[kept, "split"]
+        bad = preset[~preset.isin(SPLIT_NAMES)]
+        if not bad.empty:
+            raise ValueError(
+                f"keep_split rows without a split, e.g. {df.loc[bad.index[0], 'image_id']!r}"
+            )
+        spans = preset.groupby(keys[kept]).nunique()
+        if (spans > 1).any():
+            raise ValueError(f"sequence {spans[spans > 1].index[0]!r} spans several splits")
+        result[kept] = preset
+    real = ~synthetic & ~df["source"].isin(set(train_only) | set(keep_split))
     weights = pd.Series(1.0, index=df.index) if weights is None else weights
     weights = weights.to_frame() if isinstance(weights, pd.Series) else weights
     strata = df["source"].astype(str) if group_by == "sequence" else pd.Series("", index=df.index)
@@ -95,7 +115,7 @@ def assign_splits(
         group_split.update(zip(sizes.index, (SPLIT_NAMES[s] for s in placed), strict=True))
     result[real] = keys[real].map(group_split)
 
-    mixed = set(keys[synthetic]) & set(group_split)
+    mixed = set(keys[synthetic]) & (set(group_split) | set(keys[kept]))
     if mixed:  # a group with both synthetic and real images: keep it out of val/test
         result[keys.isin(mixed)] = "train"
     return result
@@ -177,18 +197,21 @@ def sample_train_empty(
     seed: int = 0,
     group_by: str = "sequence",
     train_only: Iterable[str] = (),
+    keep_split: Iterable[str] = (),
 ) -> pd.Series:
     """Rows to keep so empty images are at most `frac` of train; other splits untouched.
 
     Empty train images are taken round-robin across groups (flights), each group
     shuffled by `seed`, so the kept backgrounds come from as many flights as possible.
-    Synthetic images and sources in `train_only` are kept whole and left out of the
-    count, so adding them (e.g. a sim pool) doesn't change which real images are kept.
+    Synthetic images and sources in `train_only` or `keep_split` are kept whole and left
+    out of the count, so adding them (e.g. a sim pool) doesn't change which real images
+    are kept.
     """
     if not 0 <= frac < 1:
         raise ValueError(f"frac must be in [0, 1), got {frac}")
     synthetic = df["synthetic"].astype(bool) if "synthetic" in df else False
-    train = (df["split"] == "train") & ~df["source"].isin(set(train_only)) & ~synthetic
+    exempt = set(train_only) | set(keep_split)
+    train = (df["split"] == "train") & ~df["source"].isin(exempt) & ~synthetic
     candidates = train & empty
     n_keep = int(frac * int((train & ~empty).sum()) / (1 - frac))
     keys = group_keys(df[candidates], group_by, warn=False)
@@ -213,12 +236,14 @@ def build_processed(
     overwrite: bool = False,
     train_empty_frac: float | None = None,
     train_only: Iterable[str] = (),
+    keep_split: Iterable[str] = (),
 ) -> pd.DataFrame:
     """Merge pools (each with metadata.csv, images/, labels/), split, copy into `out_dir`.
 
     Images without a label file are not annotated yet and are skipped. With
     `train_empty_frac`, empty images are sampled down to that share of train.
-    Sources in `train_only` go to train in full (see assign_splits).
+    Sources in `train_only` go to train in full; `keep_split` sources keep their own
+    split (see assign_splits).
     """
     out_dir = Path(out_dir)
     for sub in ("images", "labels"):
@@ -243,9 +268,13 @@ def build_processed(
 
     balance = balance_columns(df["src_path"])
     empty = balance["empty"] == 1
-    df["split"] = assign_splits(df, ratios, seed, group_by, weights=balance, train_only=train_only)
+    df["split"] = assign_splits(
+        df, ratios, seed, group_by, weights=balance, train_only=train_only, keep_split=keep_split
+    )
     if train_empty_frac is not None:
-        keep = sample_train_empty(df, empty, train_empty_frac, seed, group_by, train_only)
+        keep = sample_train_empty(
+            df, empty, train_empty_frac, seed, group_by, train_only, keep_split
+        )
         print(
             f"train: kept {int((keep & empty & (df['split'] == 'train')).sum())} of "
             f"{int((empty & (df['split'] == 'train')).sum())} empty images"

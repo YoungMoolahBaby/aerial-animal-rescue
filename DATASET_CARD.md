@@ -81,6 +81,14 @@ would leak near-duplicates. It is also left out of the empty-image sampling belo
 adding it changed nothing else: train, val and test of the other sources are image for
 image the same as in the build before it.
 
+BAMBI keeps its own published split (`flight_metadata/splits.json` of
+[bambi-eco/Dataset](https://github.com/bambi-eco/Dataset)), which groups flights by named
+place and GPS so that val and test are flown over places train never saw. Its val goes to
+our val and its test to our test. Train flights at the two places that the published
+split also uses for test are left out (10 flights, for example one flown the same day as
+the test flights there). Like HIT-UAV, BAMBI takes no part in balancing or empty-image
+sampling, so the other sources' images are unchanged.
+
 Empty images (no boxes) are sampled down to at most 30% of train (BIRDSAI and ICAERUS),
 spread across flights, so the model learns not to fire on background. HIT-UAV keeps all
 of its 1,189 images without people (streets, cars, parked bikes). Val and test keep every empty image, so
@@ -121,6 +129,7 @@ non-commercial.
 | synthetic | composites (FloodNet backgrounds + cutouts) | see per-image | this dataset + inputs |
 | birdsai | thermal night video frames from a fixed-wing drone over protected areas in Africa: people, elephants, giraffes, lions, dogs, unknown animals ([LILA BC](https://lila.science/datasets/conservationdrones)) | [CDLA-Permissive-1.0](https://cdla.dev/permissive-1-0/) | Bondi et al., "BIRDSAI: A Dataset for Detection and Tracking in Aerial Thermal Infrared Videos", WACV 2020 |
 | icaerus_cows | RGB drone photos of grazing cows and calves on French farms ([Zenodo](https://zenodo.org/records/11048412)) | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) | Helary & Lebreton, "Drone images and their annotations of grazing cows", Zenodo, doi:10.5281/zenodo.11048412 |
+| bambi | thermal frames (1024x1024, undistorted) from nadir drone video over Austrian forests, meadows and alpine slopes: red, roe and fallow deer, wild boar, ibex, chamois, birds, people, a few dogs ([bambi.eco](https://www.bambi.eco/), [Zenodo part 1](https://doi.org/10.5281/zenodo.21874826)) | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) | BAMBI project (Biodiversity Airborne Monitoring Based on Intelligent UAV sampling), FH Upper Austria, "The BAMBI Dataset: Multimodal Nadir UAV-Recordings of Forest Wildlife", Zenodo, doi:10.5281/zenodo.21874826 |
 | hit_uav | thermal frames (640x512) of people from 60-130 m over campuses, streets and parking lots, day and night ([GitHub](https://github.com/suojiashun/HIT-UAV-Infrared-Thermal-Dataset)) | [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) (the Zenodo copy says CC0; we follow the stricter one) | Suo et al., "HIT-UAV: A high-altitude infrared thermal dataset for Unmanned Aerial Vehicle-based object detection", Scientific Data 10, 227 (2023) |
 
 Fill this from `configs/sources.yaml` for every source in this release.
@@ -144,6 +153,17 @@ Fill this from `configs/sources.yaml` for every source in this release.
     (the bicycles are parked, with no rider; the few riders have their own person box).
     The 103 images with a "DontCare" box are left out: those boxes mostly cover groups
     of people that were not boxed one by one. Video and altitude come from the file names.
+  - **BAMBI:** v2 of the multimodal release, thermal half only (the RGB boxes are
+    machine-transferred and mostly unreviewed). Every labelled val and test flight and
+    about 60 GB of train flights, picked to cover every species and as many places as
+    possible. Labels are human key frames of tracks (about one per second per animal);
+    frames are taken at key frames, at least 2 s apart and at most 60 per flight, and
+    every other track is linearly interpolated to that frame, as BAMBI's own tools do.
+    Frames that would need a box interpolated across more than 3 s are skipped. Deer,
+    boar, ibex, chamois, birds, hybrid pigs and "Unknown" animals become `other_animal`,
+    humans `person`, dogs `dog`. "No-animal" boxes (rocks and stumps that look like
+    animals) are dropped, and their frames stay as hard negatives. Animals partly hidden
+    under canopy keep their box.
 - **Synthetic:** segmented animal cutouts pasted onto disaster backgrounds, with random
   scale, rotation, brightness, blur, rain and noise. Labels come from the cutout masks.
 - **Annotation:** TODO (tool, guidelines, who annotated, how it was quality-checked).

@@ -187,3 +187,52 @@ sources:
       Bicycle: null
       OtherVehicle: null
       DontCare: null
+
+  bambi:
+    title: "BAMBI: Multimodal Nadir UAV-Recordings of Forest Wildlife (v2)"
+    url: https://github.com/bambi-eco/Dataset
+    # 8 Zenodo parts (doi:10.5281/zenodo.21874826 = part 1, ...; 386 flights, 372 GB of
+    # video). Only some flights are fetched: every labelled val + test flight and ~60 GB of
+    # train flights (list + downloader kept with the download on D:, 2026-11-04).
+    # The older Roboflow export (zenodo 15773102) is NOT used: its train images are 5
+    # augmented copies (rotated, sheared, cut-out squares) of each frame, no originals.
+    files: []
+    download: manual
+    size_gb: 153
+    license: CC-BY-4.0  # every version except environment-nc (not used)
+    redistribution: allowed
+    role: annotations
+    modality: thermal  # the RGB half is not used yet (machine-transferred boxes)
+    # Nadir thermal over forest, 1024x1024: people are small warm blobs (check visually).
+    # Videos carry no EXIF; GPS/poses in the zips are not copied.
+    contains_people: true
+    citation: "BAMBI project (Biodiversity Airborne Monitoring Based on Intelligent UAV sampling), FH Upper Austria, https://www.bambi.eco/, Zenodo doi:10.5281/zenodo.21874826"
+    # BAMBI's splits.json keeps flight LOCATIONS apart (clusters by named place + GPS);
+    # ours would only keep flights apart. Their val -> our val, their test -> our test.
+    # (Each flight's metadata.json has another `split` that mixes places: not used.)
+    keep_source_split: true
+    converter:
+      format: bambi
+      annotations: .  # data/external/bambi = junction to D:/aar/external/bambi (zips)
+      images: frames  # decoded thermal frames (cache, filled by the reader)
+      min_gap_s: 2.0
+      max_per_flight: 60
+      splits_file: splits.json  # copy of bambi-eco/Dataset flight_metadata/splits.json @252ab46
+      # Train flights at the 2 named places splits.json also uses for test
+      # (Ktn_StoaniGatter_Bichl, Stm_Feldbach_StStefan; e.g. 295 flew the same day as test
+      # 296-307). Left out so test stays on unseen places.
+      exclude_flights: [49, 51, 153, 157, 158, 159, 160, 161, 294, 295]
+    class_map:  # species column of <id>_gt.txt
+      "Sus scrofa (Wild boar)": other_animal
+      "Cervus elaphus (Red deer)": other_animal
+      "Capreolus capreolus (Roe deer)": other_animal
+      "Dama dama (Fallow Deer)": other_animal
+      "Capra ibex (Alpine ibex)": other_animal
+      "Rupicapra rupicapra (Chamois)": other_animal
+      "Aves (Bird)": other_animal
+      "Sus scrofa x Sus domesticus (Hybrid Pig)": other_animal  # pigs are other_animal
+      "Unknown": other_animal  # an animal of unknown species
+      "Homo sapiens (Human)": person
+      "Canis lupus familiaris (Dog)": dog
+      # Rocks/stumps that look like animals: the box goes, the frame stays a hard negative.
+      "No-animal": null

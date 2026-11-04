@@ -25,6 +25,8 @@ class SourceImage:
     width: int | None = None  # read from the file when not given
     height: int | None = None
     altitude_m: float | None = None  # per image, when the source records it
+    capture_date: str | None = None  # YYYY-MM-DD, when the source records it
+    split: str | None = None  # the source's own split; used only with keep_source_split
 
 
 def drop_excluded(items: Iterable[SourceImage], names: Iterable[str]) -> list[SourceImage]:
@@ -105,6 +107,8 @@ def write_pool(
                 sequence_id=item.sequence_id,
                 **record_defaults,
                 **({"altitude_m": item.altitude_m} if item.altitude_m is not None else {}),
+                **({"capture_date": item.capture_date} if item.capture_date else {}),
+                **({"split": item.split} if item.split else {}),
             )
         )
     write_metadata(records, out_dir / "metadata.csv")
