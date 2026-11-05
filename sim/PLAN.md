@@ -986,8 +986,24 @@ dog, boar).
       The 16 doubled frames don't change the picture.
     - Full build (D:/aar/processed_bambi): real sources + BAMBI 1,582 train / 632 val /
       1,587 test frames from 55 / 36 / 65 flights.
-    - Next: train with BAMBI train (55 flights) and measure the sim where BAMBI is scarce,
-      as for RGB.
+    - Trained `bambi` (real + all BAMBI train, 60 epochs, best epoch 43; reaped at epoch
+      41 and resumed). On BAMBI val (632 frames, runs/eval/bambi_val2/), same frames for all:
+
+          | model | animal AP50 | person AP50 | P / R at conf .25 |
+          |---|---|---|---|
+          | hituav | .019 | .014 | .08 / .03 |
+          | split2 | .049 | .011 | .10 / .04 |
+          | sim_p6 | .044 | .014 | .12 / .04 |
+          | sim_only_p6 | .072 | .000 | .02 / .04 |
+          | bambi | .498 | .211 | .74 / .42 |
+
+      By size: small (16-32 px) .28, medium .39. Per flight median .40; the 6 flights near
+      0 hold 39 boxes in all. On the old real val it holds: .588 vs split2 .573 (person
+      .218 vs .145, cattle .875 vs .889, other_animal .670 vs .686), alarms per empty
+      image at conf .25 .12 vs .23. Single seed.
+    - So 55 flights of in-domain data take animals from .05 to .50: the gap was the data,
+      not the model. Next: the scarce test, a few BAMBI train flights with and without
+      the thermal sim, to see if the sim helps where in-domain data is short.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
