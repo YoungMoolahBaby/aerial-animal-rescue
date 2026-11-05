@@ -1004,6 +1004,14 @@ dog, boar).
     - So 55 flights of in-domain data take animals from .05 to .50: the gap was the data,
       not the model. Next: the scarce test, a few BAMBI train flights with and without
       the thermal sim, to see if the sim helps where in-domain data is short.
+    - Scarce test set up (2026-11-05): BAMBI train cut to flights 20 (Mageregg, red
+      deer + people), 79 (Purkersdorf, boar + people), 135 (Mairist enclosure, boar), 227
+      (Zollfeld, roe deer), 252 (Oberwollanig enclosure, red deer): 131 frames, 469 boxes,
+      one flight per main place/species, picked from data stats only. All other real
+      train kept. `scarce_bambi` (10,651 images) vs `scarce_bambi_sim` (+ the 4,000 v6
+      sim images of processed_sim_p6), seeds 0 and 1, same settings as `bambi`. Lists on
+      D:/aar/scarce/, configs runs/scarce_bambi*.yaml. Judged on BAMBI val animal and
+      person AP50 (full BAMBI .498 / .211, no BAMBI ~.05 / .01).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
