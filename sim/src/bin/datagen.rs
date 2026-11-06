@@ -46,8 +46,10 @@ const MIN_PIXELS: usize = 6;
 const LABEL_MARGIN: f32 = 2.0;
 /// The real RGB cow boxes hug the animal (sharp 5 K photos), so one pixel at 1280.
 const RGB_LABEL_MARGIN: f32 = 1.0;
-/// BAMBI's boxes are drawn by hand round the animal, a little loose.
-const FOREST_LABEL_MARGIN: f32 = 1.0;
+/// BAMBI's boxes are drawn by hand with a wide margin: 5-7 px per side of 1024 beyond
+/// what a model trained on 1 px margins puts round the animal, about the same at every
+/// size (measured on BAMBI train, 2026-11-06), so about 4 render pixels more than that.
+const FOREST_LABEL_MARGIN: f32 = 5.0;
 const THERMAL_PARAMS: &str = "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
     targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n";
 const FOREST_PARAMS: &str = "image_id,night,sun,covers,trees,debris,vfov_deg,altitude_m,pitch_deg,    targets,boxes,blur,motion_px,video_q,noise,out_noise,blotch,agc_lo,agc_hi,out_lo,out_hi,jpeg,window_lo,window_hi

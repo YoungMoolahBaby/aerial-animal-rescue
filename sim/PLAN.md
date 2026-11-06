@@ -1032,6 +1032,49 @@ dog, boar).
       and boar shapes and sizes seen from straight above, canopy occlusion (BAMBI keeps
       half-hidden animals labelled), forest-floor thermal texture. BAMBI val is the
       cheap measure for each change (sim-only zero-shot, then this scarce setting).
+- Forest sim (2026-11-06; `datagen --modality forest`, `src/forest.rs`, commit b97b6b4).
+  BAMBI train frames next to v6 showed what was missing: v6 ground was flat with smooth
+  blobs, its animals small and grey, half its views oblique, and no black bands. BAMBI
+  is straight down over busy ground (grass, leaf litter, snow, fields, bare branch
+  networks, evergreen crowns, shadows, tracks), with near-white animals in herds, stored
+  1024x1024 with black bands bowed by undistortion (rows 74-102 and 912-940, the same
+  on every flight). Forest shots now:
+  - straight down (87-90 deg), short side 15-60 m, a herd of 1-12 deer or boar (deer
+    0.9-1.5x the roe-sized primitive), sometimes people and a dog, 12% empty;
+  - ground painted per shot as temperatures (2048 texels over the footprint): one or
+    two covers with an edge (sometimes scrub along it), bare trees as forking twig
+    networks (mostly warm), lumpy evergreen crowns, their shadows by day, tracks with
+    ruts, logs, stumps and rocks (12% as warm as an animal, like BAMBI's "No-animal");
+  - bodies 3-25 C above the ground under them, the window topped 1-8 C above the
+    ground's 99.9th percentile, so most come out white;
+  - a cleaner camera (`SensorParams::forest`), then the BAMBI warp (`bambi_frame`).
+  Image statistics against BAMBI train (500 frames each): noise 1.0 / 1.0, p1-p99
+  0-180 / 0-174, animal side 38 / 42 px, animal contrast 160 / 157 grey levels
+  (v6: 25 px, 75).
+  - Round 1 (sim-only, 4,000 images = 8 worlds x 500, 6 epochs, BAMBI val): animal AP50
+    .095 (v6 .072), precision / recall at conf .25 .25 / .16 (v6 .02 / .04). On BAMBI
+    train frames the model found most visible animals, but its boxes were much tighter
+    than BAMBI's hand-drawn ones: labels 1.48x wider and 1.35x taller than its boxes,
+    5-7 px per side of 1024 at every size. A tight box fails IoU .5 twice (a miss and an
+    alarm).
+  - Round 2: forest label margin 1 -> 5 render px per side (same seeds: images byte for
+    byte the same, only the boxes grow).
+
+        | BAMBI val | animal AP50 | AP50-95 | person | small / medium | P / R at .25 |
+        |---|---|---|---|---|---|
+        | sim only v6 | .072 | .019 | .000 | .00 / .05 | .02 / .04 |
+        | sim only forest round 1 | .095 | .019 | .007 | .01 / .09 | .25 / .16 |
+        | sim only forest round 2 | .318 | .129 | .059 | .08 / .23 | .37 / .34 |
+        | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
+        | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
+        | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
+
+    - Sim alone, no real image, now beats real data plus 5 BAMBI flights. Most of the
+      jump is the label margin, which only pays off because the model now finds the
+      animals (round 1's recall .16 at IoU .5 was mostly right animals, wrong box).
+    - The margin is set from BAMBI train (box sizes, not detection scores); val was only
+      scored. Alarms on BAMBI val's 13 empty frames: 1.0 per frame (too few frames to
+      judge).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
