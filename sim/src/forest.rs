@@ -90,6 +90,11 @@ struct Surface {
     dir: f64,
     /// Row spacing of a field, metres.
     rows_m: f64,
+    /// Tussocks, leaf heaps or stubble: clumps `tuft_m` across, `tuft_c` warmer (or, if
+    /// negative, colder) than the cover between them. BAMBI's meadows and litter are rough
+    /// up close, with bright tips nearly as white as an animal.
+    tuft_c: f64,
+    tuft_m: f64,
 }
 
 impl Surface {
@@ -100,6 +105,20 @@ impl Surface {
             Cover::Snow => (-rng.range(2.0, 6.0), (0.1, 0.6), (0.05, 0.4)),
             Cover::Field => (rng.range(-2.0, 2.0), (0.3, 1.5), (0.5, 2.5)),
         };
+        // (strength range °C, clump size range m); snow buries them
+        let (tuft_c, tuft_m) = match cover {
+            Cover::Meadow => ((0.3_f64, 5.0_f64), (0.08, 0.3)),
+            Cover::Litter => ((0.3, 4.0), (0.1, 0.4)),
+            Cover::Field => ((0.2, 3.0), (0.06, 0.2)),
+            Cover::Snow => ((0.0, 0.0), (0.1, 0.1)),
+        };
+        // mostly warm tips (sunlit, or holding the day's heat), some cold (night frost)
+        let sign = if rng.chance(0.7) { 1.0 } else { -1.0 };
+        let tuft_c = if tuft_c.1 > 0.0 {
+            sign * rng.range(tuft_c.0.ln(), tuft_c.1.ln()).exp()
+        } else {
+            0.0
+        };
         Self {
             cover,
             offset_c,
@@ -107,6 +126,8 @@ impl Surface {
             grain_c: rng.range(grain.0, grain.1),
             dir: rng.range(0.0, PI),
             rows_m: rng.range(0.5, 1.5),
+            tuft_c,
+            tuft_m: rng.range(tuft_m.0, tuft_m.1),
         }
     }
 }
@@ -693,7 +714,31 @@ fn surface(s: &Surface, table: &NoiseTable, seed: u64, x: f64, z: f64, ts: f64) 
             0.3 * (TAU * v / s.rows_m).sin() + 0.4 * table.at(x / 0.5 + o, z / 0.5) + 0.3 * speck
         }
     };
-    s.offset_c + s.patch_c * patches + s.grain_c * grain
+    s.offset_c + s.patch_c * patches + s.grain_c * grain + s.tuft_c * tufts(s, seed, x, z)
+}
+
+/// Clumps of a surface, 0 between them and up to 1 on their tips; most of the ground is
+/// between. On hashed cells (`value_noise`), so the clumps never repeat.
+fn tufts(s: &Surface, seed: u64, x: f64, z: f64) -> f64 {
+    if s.tuft_c == 0.0 {
+        return 0.0;
+    }
+    let m = s.tuft_m;
+    let t = 0.65 * value_noise(seed ^ 0x7F7, x / m, z / m)
+        + 0.35 * value_noise(seed ^ 0x81B, x / (0.43 * m) + 0.5, z / (0.43 * m));
+    ((t - 0.55) / 0.3).clamp(0.0, 1.0).powf(1.3)
+}
+
+/// Smooth value noise on hashed lattice cells, 0..1; one unit of (x, z) is one cell.
+fn value_noise(seed: u64, x: f64, z: f64) -> f64 {
+    let (x0, z0) = (x.floor(), z.floor());
+    let (fx, fz) = (x - x0, z - z0);
+    let (sx, sz) = (fx * fx * (3.0 - 2.0 * fx), fz * fz * (3.0 - 2.0 * fz));
+    let (i, j) = (x0 as i64, z0 as i64);
+    let l = |a: i64, b: i64| lattice(seed, a, b);
+    let a = l(i, j) + (l(i + 1, j) - l(i, j)) * sx;
+    let b = l(i, j + 1) + (l(i + 1, j + 1) - l(i, j + 1)) * sx;
+    a + (b - a) * sz
 }
 
 /// Blend toward `base + offset` along a segment, antialiased over one texel.
@@ -794,6 +839,28 @@ fn blob(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tufts_are_clumps_that_dont_repeat() {
+        let mut rng = Rng::new(3);
+        let mut s = Surface::random(&mut rng, Cover::Meadow);
+        s.tuft_c = 2.0;
+        s.tuft_m = 0.2;
+        let v: Vec<f64> = (0..4000)
+            .map(|k| tufts(&s, 9, k as f64 * 0.037, (k % 61) as f64 * 0.05))
+            .collect();
+        assert!(v.iter().all(|t| (0.0..=1.0).contains(t)));
+        let on = v.iter().filter(|&&t| t > 0.0).count() as f64 / v.len() as f64;
+        assert!((0.15..0.5).contains(&on), "share on clumps {on}");
+        // the noise table would repeat every 16 clumps (3.2 m); these don't
+        let same = (0..200)
+            .filter(|&k| {
+                let (x, z) = (k as f64 * 0.11, 1.3);
+                (tufts(&s, 9, x, z) - tufts(&s, 9, x + 3.2, z)).abs() < 1e-9
+            })
+            .count();
+        assert!(same < 100, "{same} of 200 repeat");
+    }
 
     #[test]
     fn paints_every_texel_and_is_reproducible() {

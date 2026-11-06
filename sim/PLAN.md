@@ -1066,6 +1066,9 @@ dog, boar).
         | sim only forest round 1 | .095 | .019 | .007 | .01 / .09 | .25 / .16 |
         | sim only forest round 2 | .318 | .129 | .059 | .08 / .23 | .37 / .34 |
         | sim only forest round 3 | .450 | .180 | .028 | .15 / .26 | .70 / .32 |
+        | ... same images, training seed 1 | .438 | .168 | .068 | .17 / .25 | .80 / .24 |
+        | sim only forest round 4 (tussocks + faint shots) | .401 | .159 | .012 | .11 / .24 | .68 / .26 |
+        | sim only forest round 4b (tussocks only) | .459 | .184 | .013 | .14 / .27 | .69 / .35 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1088,6 +1091,20 @@ dog, boar).
     .059 -> .028 (189 boxes, 73 of them in one flight). Still missed on BAMBI train frames:
     half of a packed herd (many lying, round), small animals under bright sunlit foliage,
     and grey animals that are barely warmer than the ground.
+  - Seed noise: round 3's images trained with seed 1 instead of 0 score .438 animal
+    (.450), but person .068 (.028): a 6-epoch run moves animal AP50 by about .01 and
+    person by several hundredths, so person is not judged on these runs.
+  - Round 4, two changes against round 3's misses; the sim's ground was much smoother
+    than BAMBI's up close:
+    - tussocks, leaf heaps and stubble: clumps 8-30 cm across (6-20 cm stubble, 10-40 cm
+      litter), up to 0.2-5 °C warmer than the cover between them (30% of covers colder:
+      frost), on hashed noise that never repeats; none on snow.
+    - faint shots: in 20%, every body only 1-5 °C warmer than the ground.
+    - Animal AP50 fell .450 -> .401, recall at .25 .32 -> .26. Round 4b, tussocks only:
+      .459, recall at .25 .35 and at .5 .24 (round 3: .13). The faint shots cost about .05
+      and were dropped; the tussocks hold AP and make the model surer, so they stay.
+      (Round 4b's renders were made with the faint share set to 0, which still drew one
+      random number per shot, so the kept code doesn't redraw them byte for byte.)
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
