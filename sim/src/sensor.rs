@@ -18,6 +18,16 @@ use crate::rng::Rng;
 pub struct SensorParams {
     /// Gaussian optics blur, pixels.
     pub blur_sigma: f32,
+    /// Detail enhancement (the DDE of DJI and FLIR cores): the image is split into its blur
+    /// over `detail_px` pixels (the base) and the rest (the detail); the base's histogram
+    /// is equalized, blended `equalize` of the way (0 = off), and the detail added back
+    /// boosted `detail` times (1 = off). Equalizing squeezes the empty range between the
+    /// ground and a small warm body, so the body's middle comes out little brighter than
+    /// the brightest ground and its rim, from the detail, white: BAMBI's rimmed bodies on
+    /// a crisp, busy ground.
+    pub detail: f32,
+    pub detail_px: f32,
+    pub equalize: f32,
     /// Motion smear while the aircraft moves (BIRDSAI is filmed from a fixed-wing plane):
     /// length in pixels (0 = none) and direction in radians.
     pub motion_px: f32,
@@ -91,6 +101,9 @@ impl SensorParams {
             out_hi: (out_lo + rng.range(80.0, 200.0) as f32).min(250.0),
             // low JPEG quality smooths noise away; real hard flights keep theirs
             jpeg_quality: rng.range(65.0, 96.0) as u8,
+            detail: 1.0,
+            detail_px: 0.0,
+            equalize: 0.0,
         }
     }
 }
@@ -124,7 +137,22 @@ impl SensorParams {
             out_lo,
             out_hi: (out_lo + rng.range(170.0, 240.0) as f32).min(255.0),
             jpeg_quality: rng.range(85.0, 97.0) as u8,
+            // half the shots enhanced, from gently to BAMBI's strongest (white-rimmed
+            // bodies on a crisp, busy ground)
+            detail: 1.0,
+            detail_px: log_range(rng, 1.5, 6.0),
+            equalize: 0.0,
         }
+        .enhanced(rng)
+    }
+
+    /// Detail enhancement in half the shots (`detail`).
+    fn enhanced(mut self, rng: &mut Rng) -> Self {
+        if rng.chance(0.5) {
+            self.detail = log_range(rng, 1.5, 5.0);
+            self.equalize = rng.range(0.3, 0.9) as f32;
+        }
+        self
     }
 }
 
@@ -221,6 +249,8 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
     }
     let img = blur(&img, width, height, p.blur_sigma);
     let img = smear(&img, width, height, p.motion_px, p.motion_dir);
+    // on the signal before the noise: the cameras' enhancement holds the noise back
+    let img = enhance(&img, width, height, p);
     let mut img = interlace(&img, width, height, p.interlace_px);
     let cols: Vec<f32> = (0..width)
         .map(|_| p.fpn_col * rng.normal() as f32)
@@ -256,6 +286,39 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
             .collect(),
         None => out,
     }
+}
+
+/// Detail enhancement (`SensorParams::detail`): the base, the image's blur over
+/// `detail_px`, part equalized within its own range, plus the detail boosted.
+pub fn enhance(img: &[f32], width: usize, height: usize, p: &SensorParams) -> Vec<f32> {
+    if p.detail == 1.0 && p.equalize == 0.0 {
+        return img.to_vec();
+    }
+    let base = blur(img, width, height, p.detail_px);
+    let (lo, hi) = base
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+    let span = (hi - lo).max(1e-3);
+    // the histogram's cumulative share at each bin's middle
+    const BINS: usize = 512;
+    let bin = |v: f32| (((v - lo) / span * BINS as f32) as usize).min(BINS - 1);
+    let mut cdf = vec![0f32; BINS];
+    for &v in &base {
+        cdf[bin(v)] += 1.0;
+    }
+    let mut below = 0.0;
+    for c in &mut cdf {
+        let here = *c;
+        *c = (below + here / 2.0) / base.len() as f32;
+        below += here;
+    }
+    img.iter()
+        .zip(&base)
+        .map(|(&v, &b)| {
+            let flat = lo + span * cdf[bin(b)];
+            b + p.equalize * (flat - b) + p.detail * (v - b)
+        })
+        .collect()
 }
 
 /// Shift every odd row sideways by `px` pixels (rounded), clamping at the edges.
@@ -428,6 +491,9 @@ mod tests {
             out_noise: 0.0,
             blotch: 0.0,
             blotch_px: 1.0,
+            detail: 1.0,
+            detail_px: 0.0,
+            equalize: 0.0,
             fpn_col: 0.0,
             fpn_row: 0.0,
             agc_lo_pct: 0.0,
@@ -470,6 +536,9 @@ mod tests {
                 out_noise: 0.0,
                 blotch: 0.0,
                 blotch_px: 1.0,
+                detail: 1.0,
+                detail_px: 0.0,
+                equalize: 0.0,
                 fpn_col: 0.0,
                 fpn_row: 0.0,
                 agc_lo_pct: 0.0,
@@ -492,6 +561,60 @@ mod tests {
         let (clear, foggy) = (snr(0.0), snr(0.7));
         assert!(foggy < clear * 0.6, "clear {clear}, foggy {foggy}");
         assert_eq!(SensorParams::random(&mut Rng::new(0)).weather(), "clear");
+    }
+
+    #[test]
+    fn enhance_rims_a_warm_body() {
+        // a 20x20 body at 200 on ground at 100
+        let (w, h) = (60, 60);
+        let img: Vec<f32> = (0..w * h)
+            .map(|k| {
+                let (x, y) = (k % w, k / w);
+                if (20..40).contains(&x) && (20..40).contains(&y) {
+                    200.0
+                } else {
+                    100.0
+                }
+            })
+            .collect();
+        let mut p = SensorParams::forest(&mut Rng::new(0));
+        (p.detail, p.detail_px, p.equalize) = (1.0, 3.0, 0.0);
+        assert_eq!(enhance(&img, w, h, &p), img);
+        p.detail = 3.0;
+        let e = enhance(&img, w, h, &p);
+        let at = |x: usize, y: usize| e[y * w + x];
+        // brighter rim than middle, a dark halo outside, flat ground far off unchanged
+        assert!(at(21, 30) > at(30, 30) + 20.0, "{} {}", at(21, 30), at(30, 30));
+        assert!(at(18, 30) < 90.0, "{}", at(18, 30));
+        assert!((at(5, 5) - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn equalizing_squeezes_the_gap_to_a_small_warm_body() {
+        // ground ramping 90-110 across, a 6x6 body at 250
+        let (w, h) = (60, 60);
+        let img: Vec<f32> = (0..w * h)
+            .map(|k| {
+                let (x, y) = (k % w, k / w);
+                if (27..33).contains(&x) && (27..33).contains(&y) {
+                    250.0
+                } else {
+                    90.0 + 20.0 * x as f32 / w as f32
+                }
+            })
+            .collect();
+        let mut p = SensorParams::forest(&mut Rng::new(0));
+        (p.detail, p.detail_px, p.equalize) = (1.0, 0.0, 1.0);
+        let e = enhance(&img, w, h, &p);
+        let ground_max = (0..w * h)
+            .filter(|&k| img[k] < 200.0)
+            .map(|k| e[k])
+            .fold(f32::MIN, f32::max);
+        let body = e[30 * w + 30];
+        // the body is still the warmest thing, but only just
+        assert!(body > ground_max && body - ground_max < 0.2 * (250.0 - 110.0), "{body} {ground_max}");
+        // and the range is kept
+        assert!(e.iter().all(|&v| (89.0..=251.0).contains(&v)));
     }
 
     #[test]

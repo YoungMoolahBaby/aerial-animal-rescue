@@ -1072,6 +1072,7 @@ dog, boar).
         | sim only forest round 5 (crowns overhead) | .488 | .198 | .046 | .17 / .29 | .66 / .41 |
         | sim only forest round 6 (BAMBI-sized animals) | .481 | .193 | .063 | .19 / .28 | .55 / .48 |
         | sim only forest round 7 (man-made things) | .508 | .209 | .010 | .16 / .29 | .60 / .48 |
+        | sim only forest round 8 (camera detail enhancement) | .505 | .195 | .028 | .20 / .28 | .61 / .48 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1154,6 +1155,31 @@ dog, boar).
     .38) and recall .500 -> .463; busy surroundings are still the weakest (.33).
     Person .010: one flight holds 73 of the 189 person boxes, and person moves by
     several hundredths between seeds, so it is not judged here.
+  - What the busy-surround misses are (round 6 model, 764 boxes with ring sd >= 35): not
+    faint (contrast median 59, hits 55) but on brighter ground (ring median 85 vs 68),
+    three in four with no detection near. Mostly flights 249, 250, 252 and 143: crisp
+    bodies drawn as bright rims round greyer middles, on rough ground of clumps as white
+    as the animals, the look of a thermal core's detail enhancement (DDE). The sim's
+    ground never came near an animal's brightness, so its animals were always the
+    brightest thing in view.
+  - Round 8, detail enhancement in half the forest shots (`sensor::enhance`), after the
+    optics and before the noise: the image's blur over 1.5-6 px (the base) is histogram
+    equalized within its own range, blended 30-90% of the way, and the rest (the detail)
+    added back boosted 1.5-5x. Equalizing squeezes the empty range between the ground
+    and a small warm body, so its middle comes out little brighter than the brightest
+    ground and its rim white. (A plain unsharp mask was tried first: the render already
+    clips bodies white, so boosting only pushed them further over.)
+  - Animal AP50 .508 -> .505, AP50-95 .209 -> .195 (both within or near the seed noise:
+    round 3 moved .012 in AP50-95 between seeds); small .16 -> .20, medium .29 -> .28;
+    no alarm on the 13 empty val frames (round 7: 0.15). On the 600 train frames it did
+    what it was built for: flights 250 .10 -> .26, 252 .10 -> .27, 143 .39 -> .51, but
+    flight 17 .67 -> .44; overall .463 -> .472, alarms .62 -> .59 per frame. Kept: val
+    holds, and the camera is more like BAMBI's.
+  - Found while adding body shadows: ground marks (crown, slab and debris shadows) blend
+    toward the shot's base temperature plus their offset, keeping 0.4 of the ground's
+    texture, so on a cover colder than the base (snow, 2-6 °C below) a shadow comes out
+    warmer than the snow around it. Left as is for now (changing it would confound the
+    rounds); the body shadows keep the whole local texture and so always cool.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
