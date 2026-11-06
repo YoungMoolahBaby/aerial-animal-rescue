@@ -1069,6 +1069,7 @@ dog, boar).
         | ... same images, training seed 1 | .438 | .168 | .068 | .17 / .25 | .80 / .24 |
         | sim only forest round 4 (tussocks + faint shots) | .401 | .159 | .012 | .11 / .24 | .68 / .26 |
         | sim only forest round 4b (tussocks only) | .459 | .184 | .013 | .14 / .27 | .69 / .35 |
+        | sim only forest round 5 (crowns overhead) | .488 | .198 | .046 | .17 / .29 | .66 / .41 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1105,6 +1106,26 @@ dog, boar).
       and were dropped; the tussocks hold AP and make the model surer, so they stay.
       (Round 4b's renders were made with the faint share set to 0, which still drew one
       random number per shot, so the kept code doesn't redraw them byte for byte.)
+  - Recall of round 4b on 600 BAMBI train frames (2,108 animal boxes, conf .25, IoU .5),
+    by what is around each box: crowding made no difference (0 neighbours .40, 3-5 .44),
+    but busy surroundings did: with the ring of one box-side around it at a grey-level
+    sd of 35 or more (a third of the boxes) recall was .29, against about .5. The sim drew
+    its trees flat into the ground, while in BAMBI the drone looks down through the
+    crowns, so twigs cross the animals. A few flights have label quirks that cap recall
+    on their own (a whole herd in one box; boxes in the black bands or on empty ground).
+  - Round 5, trees overhead: conifer crowns and bare branches move from the ground into
+    the canopy layer (now 2,048 texels across, as fine as the ground), over the leaves if
+    any, 8-20 m up (at most 0.6 x altitude). Twigs and crowns hide what is under them in
+    the id render, so a body fully under a crown has no label. The picture blends the
+    layer by its alpha, so twigs thinner than a pixel show faintly (the id look cuts at
+    half); a clear texel beside a mark takes its temperature, so filtering leaves no halo.
+    Up close the crowns grow larger than the ground, and toward the frame's edges they
+    slide outward, as BAMBI's trees do.
+  - Animal AP50 .459 -> .488 (3x the seed noise), recall at .25 .35 -> .41, AP50-95 .198:
+    sim alone is now within .01 of real data plus all of BAMBI train (.498). On the 600
+    train frames recall .415 -> .449; busy surroundings .29 -> .36, the brightest animals
+    .37 -> .50. Weakest now: animals that are less than 20 grey levels brighter than
+    their surroundings (a third of the boxes, recall .37) and small ones (<24 px: .12).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

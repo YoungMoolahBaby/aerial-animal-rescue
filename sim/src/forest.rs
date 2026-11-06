@@ -26,18 +26,21 @@ use crate::rng::{Rng, lattice};
 
 /// Texels across the painted ground (as `fields::OVERLAY_TEX`).
 pub const FOREST_TEX: usize = 2048;
-/// Texels across the canopy layer (coarser: leaves are drawn as clumps and gaps).
-pub const CANOPY_TEX: usize = 1024;
+/// Texels across the canopy layer (as fine as the ground: it carries the bare twigs).
+pub const CANOPY_TEX: usize = 2048;
 
-/// A closed leaf canopy over part of the shot, `height_m` above the ground: clumps of
-/// foliage with gaps. Animals under it show only through the gaps (BAMBI's forest flights
-/// are full of faint animals seen between leaves, the most common miss of round 2).
+/// Everything over the animals, `height_m` above the ground: a leaf canopy of clumps and
+/// gaps over part of the shots, and the trees' crowns, conifers and bare branches. Animals
+/// under it show only through the gaps (BAMBI's forest flights are full of faint animals
+/// seen between leaves, the most common miss of round 2, and of animals crossed by twigs,
+/// since the drone looks down through the crowns).
 #[derive(Clone, Debug)]
 pub struct Canopy {
     pub height_m: f64,
-    /// Share of the square covered by leaves.
+    /// Share of the square covered by leaves (0: bare crowns only).
     pub cover: f64,
-    /// Temperatures and opacity (0 or 255) per texel, `CANOPY_TEX` squared.
+    /// Temperatures and opacity per texel, `CANOPY_TEX` squared. A clear texel next to a
+    /// leaf, crown or twig has its temperature, so filtering at the edges blends no halo.
     pub temps: Arc<Vec<f32>>,
     pub alpha: Arc<Vec<u8>>,
 }
@@ -182,12 +185,11 @@ pub struct ForestLook {
     pub covers: [Cover; 2],
     surfaces: [Surface; 2],
     edge: Option<Edge>,
-    /// Drawn in order: shadows, tracks, debris, conifer crowns, branches.
+    /// On the ground, drawn in order: shadows, tracks, debris. Conifer crowns and bare
+    /// branches are drawn over the leaves into the canopy layer.
     shadows: Vec<Blob>,
     tracks: Vec<Stroke>,
     debris: Vec<Blob>,
-    crowns: Vec<Blob>,
-    branches: Vec<Stroke>,
     pub n_trees: usize,
     pub n_debris: usize,
     /// The painted field, `FOREST_TEX` squared, row by row (z rows, x columns).
@@ -387,7 +389,7 @@ impl ForestLook {
             Cover::Meadow => 0.15,
             Cover::Field => 0.05,
         };
-        let canopy = rng.chance(canopy_p).then(|| {
+        let leaves = rng.chance(canopy_p).then(|| {
             let cover = rng.range(0.3, 0.92);
             let offset_c = if rng.chance(0.7) {
                 rng.range(1.0, 6.0)
@@ -396,11 +398,28 @@ impl ForestLook {
             };
             let mottle_c = rng.range(0.5, 2.5);
             let clump_m = rng.range(1.0, 3.0);
-            let height_m = rng.range(8.0, 20.0);
-            let seed = rng.next_u64();
-            let (temps, alpha) = paint_canopy(
-                centre, size, base_c, cover, offset_c, mottle_c, clump_m, seed, table,
-            );
+            (cover, offset_c, mottle_c, clump_m, rng.next_u64())
+        });
+        let height_m = rng.range(8.0, 20.0);
+        let overhead = leaves.is_some() || !crowns.is_empty() || !branches.is_empty();
+        let canopy = overhead.then(|| {
+            let nn = CANOPY_TEX * CANOPY_TEX;
+            let (cover, mut temps, alpha) = match leaves {
+                Some((cover, offset_c, mottle_c, clump_m, seed)) => {
+                    let (t, a) = paint_canopy(
+                        centre, size, base_c, cover, offset_c, mottle_c, clump_m, seed, table,
+                    );
+                    (cover, t, a)
+                }
+                None => (0.0, vec![base_c as f32; nn], vec![0; nn]),
+            };
+            let mut alpha: Vec<f32> = alpha.iter().map(|&a| a as f32 / 255.0).collect();
+            let layout = (centre, size, base_c);
+            paint_crowns(&mut temps, &mut alpha, layout, &crowns, &branches, table);
+            let alpha = alpha
+                .iter()
+                .map(|&a| (a.clamp(0.0, 1.0) * 255.0).round() as u8)
+                .collect();
             Canopy {
                 height_m,
                 cover,
@@ -421,8 +440,6 @@ impl ForestLook {
             shadows,
             tracks,
             debris,
-            crowns,
-            branches,
             n_trees,
             n_debris,
             field: Arc::new(Vec::new()),
@@ -643,22 +660,75 @@ pub fn paint(look: &ForestLook, table: &NoiseTable, n: usize) -> Vec<f32> {
         }
     });
     let at = |p: [f64; 2]| ((p[0] - x0) / ts, (p[1] - z0) / ts);
+    let base = look.base_c;
+    // blend toward the mark, keeping a little of the ground's texture through it
+    let mark = |field: &mut [f32], k: usize, cov: f64, target: f64, keep: f64| {
+        if cov > 0.0 {
+            let v = field[k] as f64;
+            let t = target + (v - base) * keep;
+            field[k] = (v * (1.0 - cov) + t * cov) as f32;
+        }
+    };
     for b in &look.shadows {
-        blob(&mut field, n, ts, at, b, look.base_c, table, look.seed);
+        blob(n, ts, at, b, table, look.seed, |k, cov, texture| {
+            mark(&mut field, k, cov, base + b.offset_c * texture, 0.4)
+        });
     }
     for s in &look.tracks {
-        stroke(&mut field, n, ts, at, s, look.base_c);
+        stroke(n, ts, at, s, |k, cov| {
+            mark(&mut field, k, cov, base + s.offset_c, 0.3)
+        });
     }
     for b in &look.debris {
-        blob(&mut field, n, ts, at, b, look.base_c, table, look.seed);
-    }
-    for b in &look.crowns {
-        blob(&mut field, n, ts, at, b, look.base_c, table, look.seed);
-    }
-    for s in &look.branches {
-        stroke(&mut field, n, ts, at, s, look.base_c);
+        blob(n, ts, at, b, table, look.seed, |k, cov, texture| {
+            mark(&mut field, k, cov, base + b.offset_c * texture, 0.4)
+        });
     }
     field
+}
+
+/// Conifer crowns and bare branches over the canopy layer (`temps`, `alpha` 0..1), laid
+/// over whatever is there (leaves, or nothing). `layout`: the square's centre, size and
+/// base temperature.
+fn paint_crowns(
+    temps: &mut [f32],
+    alpha: &mut [f32],
+    layout: ([f64; 2], f64, f64),
+    crowns: &[Blob],
+    branches: &[Stroke],
+    table: &NoiseTable,
+) {
+    let (centre, size, base_c) = layout;
+    let n = CANOPY_TEX;
+    let ts = size / n as f64;
+    let (x0, z0) = (centre[0] - size / 2.0, centre[1] - size / 2.0);
+    let at = |p: [f64; 2]| ((p[0] - x0) / ts, (p[1] - z0) / ts);
+    for b in crowns {
+        blob(n, ts, at, b, table, 0, |k, cov, texture| {
+            over(&mut temps[k], &mut alpha[k], base_c + b.offset_c * texture, cov)
+        });
+    }
+    for s in branches {
+        stroke(n, ts, at, s, |k, cov| {
+            over(&mut temps[k], &mut alpha[k], base_c + s.offset_c, cov)
+        });
+    }
+}
+
+/// Lay `target` with coverage `cov` over a texel whose opacity so far is `a`. A clear
+/// texel beside the mark (`cov` 0) takes its temperature, so the renderer's bilinear read
+/// at the mark's edge doesn't mix in the temperature of nothing.
+fn over(t: &mut f32, a: &mut f32, target: f64, cov: f64) {
+    if cov <= 0.0 {
+        if *a <= 0.0 {
+            *t = target as f32;
+        }
+        return;
+    }
+    let (t0, a0) = (*t as f64, *a as f64);
+    let a1 = a0 + cov * (1.0 - a0);
+    *t = ((t0 * a0 * (1.0 - cov) + target * cov) / a1) as f32;
+    *a = a1 as f32;
 }
 
 /// The covers' temperature at (x, z): base, offset, patches, grain, rows or streaks.
@@ -741,14 +811,14 @@ fn value_noise(seed: u64, x: f64, z: f64) -> f64 {
     a + (b - a) * sz
 }
 
-/// Blend toward `base + offset` along a segment, antialiased over one texel.
+/// A segment's coverage of the texels near it, antialiased over one texel: calls
+/// `put(texel, coverage)` out to a texel and a half past its edge (coverage 0 there).
 fn stroke(
-    field: &mut [f32],
     n: usize,
     ts: f64,
     at: impl Fn([f64; 2]) -> (f64, f64),
     s: &Stroke,
-    base_c: f64,
+    mut put: impl FnMut(usize, f64),
 ) {
     let (ax, ay) = at(s.a);
     let (bx, by) = at(s.b);
@@ -773,27 +843,23 @@ fn stroke(
             let t = ((px * dx + py * dy) / len2).clamp(0.0, 1.0);
             let (qx, qy) = (px - t * dx, py - t * dy);
             let d = (qx * qx + qy * qy).sqrt();
-            let cov = band(d, half_drawn, 1.0) as f64 * strength;
-            if cov > 0.0 {
-                let v = &mut field[j * n + i];
-                let target = base_c + s.offset_c + (*v as f64 - base_c) * 0.3;
-                *v = (*v as f64 * (1.0 - cov) + target * cov) as f32;
+            if d <= half_drawn + 1.5 {
+                put(j * n + i, band(d, half_drawn, 1.0) as f64 * strength);
             }
         }
     }
 }
 
-/// Blend toward `base + offset` inside a soft ellipse (spiky for conifer crowns).
-#[allow(clippy::too_many_arguments)]
+/// A soft ellipse's coverage (spiky for conifer crowns): calls `put(texel, coverage,
+/// texture)` over its square, `texture` scaling its offset (a crown's clumps).
 fn blob(
-    field: &mut [f32],
     n: usize,
     ts: f64,
     at: impl Fn([f64; 2]) -> (f64, f64),
     b: &Blob,
-    base_c: f64,
     table: &NoiseTable,
     seed: u64,
+    mut put: impl FnMut(usize, f64, f64),
 ) {
     let (cx, cy) = at(b.centre);
     let r = b.radii[0].max(b.radii[1]) / ts * 1.3 + 2.0;
@@ -826,12 +892,7 @@ fn blob(
                 0.12
             };
             let soft = (2.0 * ts / b.radii[0].min(b.radii[1])).max(share);
-            let cov = ((1.0 - d) / soft).clamp(0.0, 1.0);
-            if cov > 0.0 {
-                let v = &mut field[j * n + i];
-                let target = base_c + b.offset_c * texture + (*v as f64 - base_c) * 0.4;
-                *v = (*v as f64 * (1.0 - cov) + target * cov) as f32;
-            }
+            put(j * n + i, ((1.0 - d) / soft).clamp(0.0, 1.0), texture);
         }
     }
 }
@@ -897,6 +958,46 @@ mod tests {
         let share = alpha.iter().filter(|&&a| a >= 128).count() as f64 / alpha.len() as f64;
         // the cut leaves 60%, the gaps between leaves take some of that
         assert!((0.4..0.62).contains(&share), "{share}");
+    }
+
+    #[test]
+    fn over_lays_marks_on_the_layer() {
+        // a clear texel beside a mark takes its temperature but stays clear
+        let (mut t, mut a) = (5.0_f32, 0.0_f32);
+        over(&mut t, &mut a, 9.0, 0.0);
+        assert_eq!((t, a), (9.0, 0.0));
+        // half covered: the mark's temperature, half opaque
+        let (mut t, mut a) = (5.0_f32, 0.0_f32);
+        over(&mut t, &mut a, 9.0, 0.5);
+        assert_eq!((t, a), (9.0, 0.5));
+        // over an opaque leaf: mixed by coverage, still opaque
+        let (mut t, mut a) = (5.0_f32, 1.0_f32);
+        over(&mut t, &mut a, 9.0, 0.25);
+        assert!((t - 6.0).abs() < 1e-6 && a == 1.0);
+        // an opaque texel beside a mark keeps its own temperature
+        let (mut t, mut a) = (5.0_f32, 1.0_f32);
+        over(&mut t, &mut a, 9.0, 0.0);
+        assert_eq!((t, a), (5.0, 1.0));
+    }
+
+    #[test]
+    fn bare_crowns_go_overhead() {
+        let table = NoiseTable::new(4);
+        // a shot with trees and no leaves: the layer holds only the crowns and twigs
+        let look = (0..200)
+            .map(|k| ForestLook::random(&mut Rng::new(k), [0.0, 0.0], 30.0, None, &table))
+            .find(|l| l.n_trees > 2 && l.canopy.as_ref().is_some_and(|c| c.cover == 0.0))
+            .expect("a bare-tree shot");
+        let c = look.canopy.as_ref().unwrap();
+        assert_eq!(c.alpha.len(), CANOPY_TEX * CANOPY_TEX);
+        let share = c.alpha.iter().filter(|&&a| a >= 128).count() as f64 / c.alpha.len() as f64;
+        assert!((0.001..0.6).contains(&share), "{share}");
+        // shots without trees or leaves have nothing overhead
+        let open = (0..200)
+            .map(|k| ForestLook::random(&mut Rng::new(k), [0.0, 0.0], 30.0, None, &table))
+            .find(|l| l.n_trees == 0)
+            .expect("an open shot");
+        assert!(open.canopy.as_ref().is_none_or(|c| c.cover > 0.0));
     }
 
     #[test]

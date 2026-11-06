@@ -468,7 +468,8 @@ pub struct SceneHandles {
     patches: Vec<Handle<Image>>,
     /// RGB: the painted ground's mesh and image, and the noise it's painted from.
     overlay: Option<(Handle<Mesh>, Handle<Image>)>,
-    /// Forest: the leaf canopy's mesh, its picture (grey + alpha) and its id mask.
+    /// Forest: the canopy layer's mesh (leaves, crowns, twigs), its picture (grey + alpha)
+    /// and its id mask.
     canopy: Option<(Handle<Mesh>, Handle<Image>, Handle<Image>)>,
     table: Option<NoiseTable>,
 }
@@ -1610,24 +1611,29 @@ pub fn spawn_scene(
         ));
         (mesh, image)
     });
-    // forest: a leaf canopy above the ground, cut out by its alpha; in the id look its
+    // forest: the canopy layer above the ground (leaves, crowns and twigs). The picture
+    // blends by its alpha, so a twig thinner than a pixel shows faintly; the id look cuts
+    // at half, so a body loses the pixels a leaf or twig mostly hides. In the id look its
     // leaves are background, so bodies under them get no pixels
     let canopy = forest.then(|| {
         let picture = images.add(overlay_image(CANOPY_TEX));
         let mask = images.add(overlay_image(CANOPY_TEX));
         let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0, 10.0));
-        let leaves = |mats: &mut Assets<StandardMaterial>, color: Color, image: &Handle<Image>| {
+        let leaves = |mats: &mut Assets<StandardMaterial>,
+                      color: Color,
+                      image: &Handle<Image>,
+                      alpha_mode: AlphaMode| {
             mats.add(StandardMaterial {
                 base_color: color,
                 base_color_texture: Some(image.clone()),
                 unlit: true,
-                alpha_mode: AlphaMode::Mask(0.5),
+                alpha_mode,
                 cull_mode: None,
                 ..default()
             })
         };
-        let pic = leaves(mats, Color::WHITE, &picture);
-        let id = leaves(mats, Color::srgb(0.0, 1.0, 0.0), &mask);
+        let pic = leaves(mats, Color::WHITE, &picture, AlphaMode::Blend);
+        let id = leaves(mats, Color::srgb(0.0, 1.0, 0.0), &mask, AlphaMode::Mask(0.5));
         commands.spawn((
             Mesh3d(mesh.clone()),
             MeshMaterial3d(pic.clone()),
