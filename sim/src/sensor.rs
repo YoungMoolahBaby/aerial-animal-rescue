@@ -96,6 +96,97 @@ impl SensorParams {
 }
 
 impl SensorParams {
+    /// A cleaner camera for forest shots, like BAMBI's (DJI thermal drones, saved as
+    /// undistorted video): little noise (median neighbour difference 1 grey level), no
+    /// interlace, a gain that keeps the ground darkish and lets warm bodies go white.
+    pub fn forest(rng: &mut Rng) -> Self {
+        let out_lo = rng.range(0.0, 30.0) as f32;
+        Self {
+            blur_sigma: log_range(rng, 0.5, 1.3),
+            motion_px: if rng.chance(0.15) {
+                rng.range(1.0, 3.0) as f32
+            } else {
+                0.0
+            },
+            motion_dir: rng.range(0.0, std::f64::consts::PI) as f32,
+            interlace_px: 0.0,
+            video_quality: rng.chance(0.3).then(|| rng.range(70.0, 90.0) as u8),
+            link_noise: rng.range(0.2, 0.8) as f32,
+            noise: log_range(rng, 0.2, 1.2),
+            haze: 0.0,
+            out_noise: log_range(rng, 0.3, 2.0),
+            blotch: log_range(rng, 0.1, 1.5),
+            blotch_px: rng.range(1.0, 3.0) as f32,
+            fpn_col: rng.range(0.0, 0.3) as f32,
+            fpn_row: rng.range(0.0, 0.3) as f32,
+            agc_lo_pct: rng.range(0.2, 3.0) as f32,
+            agc_hi_pct: rng.range(99.0, 99.95) as f32,
+            out_lo,
+            out_hi: (out_lo + rng.range(170.0, 240.0) as f32).min(255.0),
+            jpeg_quality: rng.range(85.0, 97.0) as u8,
+        }
+    }
+}
+
+/// Side of a BAMBI frame: the 640x512 thermal image, undistorted and scaled into a
+/// 1024x1024 frame with black above and below.
+pub const BAMBI_SIZE: usize = 1024;
+
+/// Where the picture starts and ends in BAMBI column `u` (-1 left edge .. 1 right):
+/// undistortion bows the top and bottom edges, so the black bands are thicker in the
+/// middle (rows 102 and 912) than at the sides (74 and 940); the same on every flight.
+fn bambi_rows(u: f64) -> (f64, f64) {
+    (102.0 - 28.0 * u * u, 912.0 + 28.0 * u * u)
+}
+
+/// A `width` x `height` grey frame as BAMBI stores it: stretched to 1024 wide, each column
+/// into the rows `bambi_rows` gives it, black outside (bilinear).
+pub fn bambi_frame(img: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let n = BAMBI_SIZE;
+    let mut out = vec![0u8; n * n];
+    let at = |x: isize, y: isize| {
+        let x = x.clamp(0, width as isize - 1) as usize;
+        let y = y.clamp(0, height as isize - 1) as usize;
+        img[y * width + x] as f64
+    };
+    for x in 0..n {
+        let u = (x as f64 + 0.5) / n as f64 * 2.0 - 1.0;
+        let (top, bottom) = bambi_rows(u);
+        let sx = (x as f64 + 0.5) / n as f64 * width as f64 - 0.5;
+        for y in (top.ceil() as usize)..(bottom.floor() as usize).min(n) {
+            let sy = (y as f64 + 0.5 - top) / (bottom - top) * height as f64 - 0.5;
+            let (x0, y0) = (sx.floor(), sy.floor());
+            let (fx, fy) = (sx - x0, sy - y0);
+            let (x0, y0) = (x0 as isize, y0 as isize);
+            let a = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
+            let b = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
+            out[y * n + x] = (a + (b - a) * fy).round().clamp(1.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+/// A box (x1, y1, x2, y2) of a `width` x `height` frame, in `bambi_frame` pixels.
+pub fn bambi_box(b: [f32; 4], width: usize, height: usize) -> [f32; 4] {
+    let n = BAMBI_SIZE as f64;
+    let sx = n / width as f64;
+    let (x1, x2) = (b[0] as f64 * sx, b[2] as f64 * sx);
+    let (mut y1, mut y2) = (f64::MAX, f64::MIN);
+    // the rows stretch most at the sides, so check both ends and the middle if inside
+    let mut us = vec![x1 / n * 2.0 - 1.0, x2 / n * 2.0 - 1.0];
+    if x1 < n / 2.0 && x2 > n / 2.0 {
+        us.push(0.0);
+    }
+    for u in us {
+        let (top, bottom) = bambi_rows(u);
+        let scale = (bottom - top) / height as f64;
+        y1 = y1.min(top + b[1] as f64 * scale);
+        y2 = y2.max(top + b[3] as f64 * scale);
+    }
+    [x1 as f32, y1 as f32, x2 as f32, y2 as f32]
+}
+
+impl SensorParams {
     /// Draw the weather from its own stream (so the other draws, and the shots after,
     /// stay as they were): 35% of frames hazy or foggy.
     pub fn with_weather(mut self, rng: &mut Rng) -> Self {
@@ -284,6 +375,34 @@ pub fn percentile(values: &[f32], pct: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bambi_frame_has_bowed_black_bands() {
+        let (w, h) = (640, 512);
+        let out = bambi_frame(&vec![200u8; w * h], w, h);
+        let n = BAMBI_SIZE;
+        assert_eq!(out.len(), n * n);
+        // first picture row: 102 in the middle column, 74 at the sides (BAMBI's frames)
+        let first = |x: usize| (0..n).find(|&y| out[y * n + x] > 0).unwrap();
+        let last = |x: usize| (0..n).rev().find(|&y| out[y * n + x] > 0).unwrap();
+        assert_eq!(first(n / 2), 102);
+        assert!((74..=76).contains(&first(0)));
+        assert_eq!(last(n / 2), 911);
+        assert!((938..=940).contains(&last(n - 1)));
+        assert!(out[500 * n + 500] == 200 && out[10 * n + 500] == 0);
+    }
+
+    #[test]
+    fn bambi_box_follows_the_frame() {
+        let (w, h) = (640, 512);
+        // a body in the middle of the frame stays in the middle, 1.6x as wide
+        let b = bambi_box([310.0, 246.0, 330.0, 266.0], w, h);
+        assert!((b[0] - 496.0).abs() < 0.01 && (b[2] - 528.0).abs() < 0.01);
+        assert!(b[1] > 102.0 + 246.0 * 1.58 && b[3] < 102.0 + 266.0 * 1.6);
+        // the whole picture maps onto the bowed band, widest at the sides
+        let all = bambi_box([0.0, 0.0, 640.0, 512.0], w, h);
+        assert_eq!(all, [0.0, 74.0, 1024.0, 940.0]);
+    }
 
     #[test]
     fn blur_keeps_the_mean_and_spreads_a_point() {

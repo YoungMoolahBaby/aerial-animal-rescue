@@ -2,7 +2,8 @@
 //!
 //! Only `scene` depends on Bevy. `world` (terrain, on CortenForge), `thermal` (temperatures
 //! per shot), `sensor` (the thermal camera model), `rgb` (daylight colours and the RGB
-//! camera model), `fields` (the farm ground of an RGB shot), `yard` (its farmyards),
+//! camera model), `fields` (the farm ground of an RGB shot), `yard` (its farmyards), `forest` (the
+//! ground of a BAMBI-like forest shot),
 //! `bodies` (baked CC0 animal models) and `capture` (rendered frames -> dataset pool) work
 //! with any renderer; `capture` is meant to move into a CortenForge crate later (see the
 //! Suggestions in `sim/FINDINGS.md`).
@@ -10,6 +11,7 @@
 pub mod bodies;
 pub mod capture;
 pub mod fields;
+pub mod forest;
 pub mod rgb;
 pub mod rng;
 pub mod scene;

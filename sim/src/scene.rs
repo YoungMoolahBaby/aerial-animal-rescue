@@ -34,6 +34,7 @@ use bevy::render::view::Msaa;
 
 use crate::bodies::{self, Model};
 use crate::fields::{Layout, NoiseTable, OVERLAY_TEX};
+use crate::forest::{FOREST_TEX, ForestLook};
 use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
@@ -66,6 +67,9 @@ const PATCH_TEXTURES: usize = 4;
 pub enum Modality {
     Thermal,
     Rgb,
+    /// Thermal nadir video over forests and meadows, like BAMBI (`forest.rs`): written
+    /// as thermal frames.
+    Forest,
 }
 
 impl Modality {
@@ -73,6 +77,7 @@ impl Modality {
         match s {
             "thermal" => Some(Self::Thermal),
             "rgb" => Some(Self::Rgb),
+            "forest" => Some(Self::Forest),
             _ => None,
         }
     }
@@ -80,7 +85,7 @@ impl Modality {
     /// The metadata's `modality` value.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Thermal => "thermal",
+            Self::Thermal | Self::Forest => "thermal",
             Self::Rgb => "rgb",
         }
     }
@@ -88,7 +93,7 @@ impl Modality {
     /// Frame width and height.
     pub fn size(self) -> (u32, u32) {
         match self {
-            Self::Thermal => (IMAGE_W, IMAGE_H),
+            Self::Thermal | Self::Forest => (IMAGE_W, IMAGE_H),
             Self::Rgb => (RGB_W, RGB_H),
         }
     }
@@ -98,6 +103,7 @@ impl Modality {
         let pool: &[(Kind, usize)] = match self {
             Self::Thermal => &POOL,
             Self::Rgb => &RGB_POOL,
+            Self::Forest => &FOREST_POOL,
         };
         pool.iter()
             .flat_map(|&(k, n)| std::iter::repeat_n(k, n))
@@ -108,6 +114,8 @@ impl Modality {
         match self {
             Self::Thermal => &CLUTTER,
             Self::Rgb => &RGB_CLUTTER,
+            // trees, logs and rocks are painted into the ground (`forest.rs`)
+            Self::Forest => &[],
         }
     }
 
@@ -209,6 +217,15 @@ pub const RGB_POOL: [(Kind, usize); 5] = [
     (Kind::Horse, 5),
     (Kind::Sheep, 7),
     (Kind::Dog, 2),
+];
+
+/// The forest pool: herds of deer and boar like BAMBI's (up to a dozen in a frame), a few
+/// people and dogs.
+pub const FOREST_POOL: [(Kind, usize); 4] = [
+    (Kind::Person, 3),
+    (Kind::Dog, 2),
+    (Kind::Deer, 12),
+    (Kind::Boar, 12),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -498,6 +515,8 @@ pub struct Shot {
     pub faint: bool,
     /// Colours, for an RGB shot (the temperatures above are then unused).
     pub rgb: Option<RgbLook>,
+    /// The painted ground of a forest shot.
+    pub forest: Option<ForestLook>,
 }
 
 /// How far a faint body stands out from the ground under it, in grey levels of the
@@ -521,6 +540,9 @@ impl Shot {
         faint_share: f64,
         modality: Modality,
     ) -> Self {
+        if modality == Modality::Forest {
+            return Self::forest(rng, world, kinds, posed);
+        }
         let terrain = &world.terrain;
         let thermal = modality == Modality::Thermal;
         let (vfov_deg, altitude_m, pitch_deg) = if thermal {
@@ -857,12 +879,168 @@ impl Shot {
             window,
             faint,
             rgb,
+            forest: None,
         }
     }
 
     pub fn n_targets(&self) -> usize {
         self.targets.iter().flatten().count()
     }
+
+    /// A forest shot like BAMBI's: straight down over painted forest ground (`forest.rs`),
+    /// a herd of deer or boar (sometimes people and a dog) much warmer than the ground.
+    fn forest(rng: &mut Rng, world: &World, kinds: &[Kind], posed: &[bool]) -> Self {
+        let terrain = &world.terrain;
+        // a wide thermal lens; the frame's short side covers 15-60 m, so a deer is about
+        // 13-50 px long in the 640x512 render (BAMBI: median box side 42 px of 1024)
+        let vfov_deg = rng.range(45.0, 52.0);
+        let cover_m = rng.range(15.0_f64.ln(), 60.0_f64.ln()).exp();
+        let altitude_m = cover_m / 2.0 / (vfov_deg / 2.0).to_radians().tan();
+        let pitch_deg = rng.range(87.0, 90.0);
+        let aim = terrain.random_spot(rng, 100.0);
+        let yaw = rng.range(0.0, std::f64::consts::TAU);
+        let back = altitude_m / pitch_deg.to_radians().tan();
+        let (dir_x, dir_z) = (yaw.cos(), yaw.sin());
+        let eye = Vec3::new(
+            (aim[0] - dir_x * back) as f32,
+            (aim[1] + altitude_m) as f32,
+            (aim[2] - dir_z * back) as f32,
+        );
+        let target = Vec3::new(aim[0] as f32, aim[1] as f32, aim[2] as f32);
+        let up = Vec3::new(dir_x as f32, 0.0, dir_z as f32);
+        let camera = Transform::from_translation(eye).looking_at(target, up);
+
+        // dawn, day or night; by day the sun casts the crowns' shadows
+        let night = rng.chance(0.3);
+        let sun = (!night && rng.chance(0.7)).then(|| {
+            let elevation = rng.range(10.0_f64, 55.0).to_radians();
+            let azimuth = rng.range(0.0, std::f64::consts::TAU);
+            [
+                elevation.cos() * azimuth.cos(),
+                elevation.sin(),
+                elevation.cos() * azimuth.sin(),
+            ]
+        });
+        let (centre, size) = footprint(&camera, vfov_deg, aim[1]);
+        let table = NoiseTable::new(world.seed ^ 0xF0_4E57);
+        let look = ForestLook::random(rng, centre, size, sun, &table);
+
+        let chosen = forest_targets(rng, kinds);
+        let spread = cover_m / 2.0;
+        let (cx, cz) = (
+            aim[0] + rng.range(-0.8, 0.8) * spread,
+            aim[2] + rng.range(-0.8, 0.8) * spread,
+        );
+        // herds stand close: a few metres for boar, wider for deer
+        let herd_r = rng.range(1.5, 12.0_f64.min(spread));
+        let targets = kinds
+            .iter()
+            .zip(&chosen)
+            .enumerate()
+            .map(|(k, (&kind, &on))| {
+                on.then(|| {
+                    let (x, z) = (
+                        cx + rng.normal() * herd_r / 2.0,
+                        cz + rng.normal() * herd_r / 2.0,
+                    );
+                    let feet = Vec3::new(x as f32, terrain.height(x, z) as f32, z as f32);
+                    let ground = look.ground_at(x, z);
+                    // BAMBI's animals are near white on a darker ground: mostly many
+                    // degrees warmer than anything around them, a few faint
+                    let (lo, hi) = if kind == Kind::Person {
+                        (3.0_f64, 20.0_f64)
+                    } else {
+                        (3.0, 25.0)
+                    };
+                    let torso = ground + rng.range(lo.ln(), hi.ln()).exp();
+                    let limb = ground + (torso - ground) * rng.range(0.5, 0.85);
+                    let head = ground + (torso - ground) * rng.range(1.0, 1.2);
+                    let mut transform = pose(rng, kind, feet, posed.get(k) == Some(&true));
+                    // red and fallow deer are bigger than the roe-sized primitive
+                    if kind == Kind::Deer {
+                        transform.scale *= rng.range(0.9, 1.5) as f32;
+                    }
+                    Placement {
+                        transform,
+                        temp_c: [torso, limb, head],
+                    }
+                })
+            })
+            .collect();
+
+        // bodies warmer than the window's top come out white, as BAMBI's mostly do
+        let window = TempWindow {
+            lo: look.percentile(0.1) - 0.5,
+            hi: look.percentile(99.9) + rng.range(1.0, 8.0),
+        };
+        let conditions = Conditions {
+            night,
+            air_c: look.base_c,
+            sun_c: 0.0,
+            sun_dir: sun.unwrap_or([0.0, 1.0, 0.0]),
+            cooling_c: 0.0,
+            patch_c: 0.0,
+            texture: 0.0,
+            speckle: 0.0,
+            texture_seed: 0,
+            water: None,
+        };
+        Self {
+            altitude_m,
+            pitch_deg,
+            vfov_deg,
+            camera,
+            conditions,
+            targets,
+            clutter: Vec::new(),
+            clutter_c: Vec::new(),
+            road_c: look.base_c,
+            ground_c: vec![look.base_c; world.vertices.len()],
+            window,
+            faint: false,
+            rgb: None,
+            forest: Some(look),
+        }
+    }
+}
+
+/// Who is in a forest shot: mostly a herd of deer or of boar (1-12), sometimes people
+/// with a dog, a mixed group, or nobody.
+fn forest_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
+    let u = rng.unit();
+    let first_n = |kind: Kind, n: usize| {
+        let mut k = 0;
+        kinds
+            .iter()
+            .map(|&x| {
+                let on = x == kind && k < n;
+                k += (x == kind) as usize;
+                on
+            })
+            .collect::<Vec<bool>>()
+    };
+    if u < 0.12 {
+        return vec![false; kinds.len()];
+    }
+    if u < 0.22 {
+        let people = first_n(Kind::Person, 1 + rng.index(3));
+        let dog = first_n(Kind::Dog, rng.chance(0.5) as usize);
+        return people.iter().zip(&dog).map(|(a, b)| *a || *b).collect();
+    }
+    if u < 0.95 {
+        let herd = if rng.chance(0.5) {
+            Kind::Deer
+        } else {
+            Kind::Boar
+        };
+        let most = kinds.iter().filter(|&&k| k == herd).count();
+        return first_n(herd, 1 + rng.index(most));
+    }
+    let mut chosen: Vec<bool> = kinds.iter().map(|_| rng.chance(0.25)).collect();
+    if !chosen.contains(&true) {
+        chosen[rng.index(kinds.len())] = true;
+    }
+    chosen
 }
 
 /// The ground the camera sees: a square (centre x, z and side, metres) around where the
@@ -1268,7 +1446,7 @@ fn unlit(mats: &mut Assets<StandardMaterial>, color: Color) -> Handle<StandardMa
 fn picture(mats: &mut Assets<StandardMaterial>, modality: Modality) -> Handle<StandardMaterial> {
     mats.add(StandardMaterial {
         base_color: Color::BLACK,
-        unlit: modality == Modality::Thermal,
+        unlit: modality != Modality::Rgb,
         perceptual_roughness: 0.95,
         reflectance: 0.15,
         cull_mode: None,
@@ -1294,6 +1472,7 @@ pub fn spawn_scene(
         "too many targets for the id render"
     );
     let rgb = modality == Modality::Rgb;
+    let forest = modality == Modality::Forest;
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -1382,8 +1561,8 @@ pub fn spawn_scene(
     ));
 
     let roads = picture(mats, modality);
-    // RGB paints its tracks and roads into the ground image instead
-    if !rgb {
+    // RGB and forest paint their tracks and roads into the ground image instead
+    if modality == Modality::Thermal {
         commands.spawn((
             Mesh3d(meshes.add(road_mesh(world))),
             MeshMaterial3d(roads.clone()),
@@ -1393,14 +1572,16 @@ pub fn spawn_scene(
             },
         ));
     }
-    // RGB: the painted ground (`fields.rs`) on a copy of the terrain under the camera,
-    // a few centimetres up; rebuilt every shot
-    let overlay = rgb.then(|| {
-        let image = images.add(overlay_image());
+    // RGB and forest: the painted ground (`fields.rs`, `forest.rs`) on a copy of the
+    // terrain under the camera, a few centimetres up; rebuilt every shot
+    let overlay = (rgb || forest).then(|| {
+        let image = images.add(overlay_image(if forest { FOREST_TEX } else { OVERLAY_TEX }));
         let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0));
         let mat = mats.add(StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(image.clone()),
+            // forest: the texture's grey is the temperature, as for every thermal material
+            unlit: forest,
             perceptual_roughness: 1.0,
             reflectance: 0.1,
             cull_mode: None,
@@ -1560,9 +1741,10 @@ pub fn spawn_scene(
     });
 }
 
-/// The painted ground image (`fields.rs`), replaced every shot.
-fn overlay_image() -> Image {
-    let n = OVERLAY_TEX as u32;
+/// The painted ground image (`fields.rs`, `forest.rs`), `n` texels square, replaced every
+/// shot.
+fn overlay_image(n: usize) -> Image {
+    let n = n as u32;
     let mut img = Image::new(
         Extent3d {
             width: n,
@@ -2321,6 +2503,15 @@ impl SceneCtl<'_, '_> {
         match &shot.rgb {
             None => self.apply_temperatures(shot),
             Some(look) => self.apply_colours(look),
+        }
+        if let (Some(look), Some((mesh, image))) = (&shot.forest, &self.handles.overlay) {
+            let w = shot.window;
+            if let Some(mut img) = self.images.get_mut(image) {
+                img.data = Some(look.rgba(|t| w.grey(t)));
+            }
+            if let Some(mut m) = self.meshes.get_mut(mesh) {
+                *m = terrain_patch(&self.world, look.centre, look.size);
+            }
         }
     }
 

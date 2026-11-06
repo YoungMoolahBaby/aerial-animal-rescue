@@ -4,7 +4,9 @@
 //!     cargo run --release --bin datagen -- --out ../data/interim/sim_phase1 --frames 20 --seed 0
 //!
 //! `--modality rgb` renders daylight colour photos (1280x960, farm pool, `rgb.rs`) instead
-//! of thermal frames (the default).
+//! of thermal frames (the default). `--modality forest` renders thermal frames like BAMBI's
+//! (straight down over painted forest ground, `forest.rs`; deer, boar, people, dogs), saved
+//! as BAMBI stores them: 1024x1024 with black bands above and below.
 //! `--faint-share 0.4` makes the bodies faint in that share of shots (v7; default 0).
 //! `--bodies assets/bodies` builds the kinds that have baked models (`scripts/bake_bodies.py`)
 //! from them instead of primitives; for a seed the shots are the same either way.
@@ -44,8 +46,12 @@ const MIN_PIXELS: usize = 6;
 const LABEL_MARGIN: f32 = 2.0;
 /// The real RGB cow boxes hug the animal (sharp 5 K photos), so one pixel at 1280.
 const RGB_LABEL_MARGIN: f32 = 1.0;
+/// BAMBI's boxes are drawn by hand round the animal, a little loose.
+const FOREST_LABEL_MARGIN: f32 = 1.0;
 const THERMAL_PARAMS: &str = "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
     targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n";
+const FOREST_PARAMS: &str = "image_id,night,sun,covers,trees,debris,vfov_deg,altitude_m,pitch_deg,    targets,boxes,blur,motion_px,video_q,noise,out_noise,blotch,agc_lo,agc_hi,out_lo,out_hi,jpeg,window_lo,window_hi
+";
 const RGB_PARAMS: &str = "image_id,field,sun,sky,sun_elev_deg,vfov_deg,altitude_m,pitch_deg,targets,boxes,\
     bales,yard_sheds,yard_targets,wb_r,wb_b,median,vignette,circle,blur,haze,contrast,saturation,noise,jpeg,bodies\n";
 
@@ -96,7 +102,7 @@ fn main() {
     let faint_share: f64 =
         get("--faint-share").map_or(0.0, |v| v.parse().expect("--faint-share is a number"));
     let modality = get("--modality").map_or(Modality::Thermal, |m| {
-        Modality::parse(&m).expect("--modality is thermal or rgb")
+        Modality::parse(&m).expect("--modality is thermal, rgb or forest")
     });
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
     let only: Vec<String> = get("--body-kinds")
@@ -122,6 +128,7 @@ fn main() {
             params: String::from(match modality {
                 Modality::Thermal => THERMAL_PARAMS,
                 Modality::Rgb => RGB_PARAMS,
+                Modality::Forest => FOREST_PARAMS,
             }),
             blank: 0,
             index: 0,
@@ -240,7 +247,9 @@ fn drive(
             match what {
                 Capture::Picture => {
                     dg.picture = Some(match dg.modality {
-                        Modality::Thermal => raw.chunks_exact(3).map(|p| p[0]).collect(),
+                        Modality::Thermal | Modality::Forest => {
+                            raw.chunks_exact(3).map(|p| p[0]).collect()
+                        }
                         Modality::Rgb => raw.clone(),
                     });
                     ctl.show_ids(true);
@@ -256,9 +265,11 @@ fn drive(
                         let picture = dg.picture.clone().unwrap();
                         let path = dir.join(format!("{}_raw.png", dg.index));
                         match dg.modality {
-                            Modality::Thermal => image::GrayImage::from_raw(width, height, picture)
-                                .unwrap()
-                                .save(path),
+                            Modality::Thermal | Modality::Forest => {
+                                image::GrayImage::from_raw(width, height, picture)
+                                    .unwrap()
+                                    .save(path)
+                            }
                             Modality::Rgb => image::RgbImage::from_raw(width, height, picture)
                                 .unwrap()
                                 .save(path),
@@ -308,8 +319,10 @@ fn padded(boxes: &[PixelBox], pad: f32, width: u32, height: u32) -> Vec<PixelBox
 }
 
 fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
-    if dg.modality == Modality::Rgb {
-        return write_rgb_shot(dg, world, boxes, bodies);
+    match dg.modality {
+        Modality::Rgb => return write_rgb_shot(dg, world, boxes, bodies),
+        Modality::Forest => return write_forest_shot(dg, world, boxes),
+        Modality::Thermal => {}
     }
     let shot = dg.shot.take().expect("a shot was placed");
     let raw = dg.picture.take().expect("thermal frame captured");
@@ -372,6 +385,81 @@ fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str)
         bodies,
         p.haze,
         shot.faint,
+    )
+    .unwrap();
+}
+
+fn write_forest_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
+    let shot = dg.shot.take().expect("a shot was placed");
+    let raw = dg.picture.take().expect("thermal frame captured");
+    let look = shot.forest.as_ref().expect("a forest shot");
+    let p = SensorParams::forest(&mut dg.rng);
+    let (w, h) = (IMAGE_W as usize, IMAGE_H as usize);
+    let out = sensor::bambi_frame(&sensor::apply(&raw, w, h, &p, &mut dg.rng), w, h);
+    let pad = p.blur_sigma.round() + FOREST_LABEL_MARGIN;
+    let n = sensor::BAMBI_SIZE as u32;
+    let boxes: Vec<PixelBox> = padded(boxes, pad, IMAGE_W, IMAGE_H)
+        .iter()
+        .map(|b| {
+            let [x1, y1, x2, y2] = sensor::bambi_box([b.x1, b.y1, b.x2, b.y2], w, h);
+            PixelBox {
+                x1,
+                y1,
+                x2,
+                y2,
+                ..*b
+            }
+        })
+        .collect();
+    let image_id = format!("sim_forest_w{}_{:06}", world.seed, dg.index);
+    dg.index += 1;
+    let c = &shot.conditions;
+    let record = Record {
+        // procedural world and primitive bodies
+        source_license: "CC-BY-4.0".into(),
+        modality: "thermal".into(),
+        altitude_m: Some(shot.altitude_m),
+        weather: "clear".into(),
+        scene_type: "forest".into(),
+        sequence_id: format!("sim-forest-world-{}", world.seed),
+    };
+    let wr = dg.writer.as_mut().expect("writer open");
+    let file = std::fs::File::create(wr.image_path(&image_id, "jpg")).expect("create image");
+    JpegEncoder::new_with_quality(std::io::BufWriter::new(file), p.jpeg_quality)
+        .encode(&out, n, n, image::ExtendedColorType::L8)
+        .expect("encode JPEG");
+    wr.add(&image_id, "jpg", n, n, &boxes, &record)
+        .expect("write label");
+    let covers = if look.covers[0] == look.covers[1] {
+        look.covers[0].name().to_string()
+    } else {
+        format!("{}+{}", look.covers[0].name(), look.covers[1].name())
+    };
+    writeln!(
+        dg.params,
+        "{image_id},{},{},{covers},{},{},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{:.1},{:.1}",
+        c.night,
+        c.sun_dir[1] < 0.999,
+        look.n_trees,
+        look.n_debris,
+        shot.vfov_deg,
+        shot.altitude_m,
+        shot.pitch_deg,
+        shot.n_targets(),
+        boxes.len(),
+        p.blur_sigma,
+        p.motion_px,
+        p.video_quality.map_or(0, |q| q),
+        p.noise,
+        p.out_noise,
+        p.blotch,
+        p.agc_lo_pct,
+        p.agc_hi_pct,
+        p.out_lo,
+        p.out_hi,
+        p.jpeg_quality,
+        shot.window.lo,
+        shot.window.hi,
     )
     .unwrap();
 }
