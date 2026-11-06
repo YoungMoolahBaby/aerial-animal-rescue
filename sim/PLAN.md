@@ -1070,6 +1070,7 @@ dog, boar).
         | sim only forest round 4 (tussocks + faint shots) | .401 | .159 | .012 | .11 / .24 | .68 / .26 |
         | sim only forest round 4b (tussocks only) | .459 | .184 | .013 | .14 / .27 | .69 / .35 |
         | sim only forest round 5 (crowns overhead) | .488 | .198 | .046 | .17 / .29 | .66 / .41 |
+        | sim only forest round 6 (BAMBI-sized animals) | .481 | .193 | .063 | .19 / .28 | .55 / .48 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1126,6 +1127,20 @@ dog, boar).
     train frames recall .415 -> .449; busy surroundings .29 -> .36, the brightest animals
     .37 -> .50. Weakest now: animals that are less than 20 grey levels brighter than
     their surroundings (a third of the boxes, recall .37) and small ones (<24 px: .12).
+  - Round 6, BAMBI-sized animals: the sim's boxes were too big (side at 1024 median 58 px,
+    41% over 64 px; BAMBI train median 42, 10th-90th percentile 26-57, 3% over 64). The
+    footprint's short side goes from 10-60 m to 20-90 m (log-uniform), which gives 31-63
+    px, median 40.
+  - Animal AP50 .488 -> .481 (within the seed noise), but the trade moved: recall at .25
+    .41 -> .48, precision .66 -> .55; small boxes .17 -> .19, medium .29 -> .28. On the
+    600 train frames recall .449 -> .500 (24-40 px .41 -> .44, 40-64 px .51 -> .59, low
+    contrast .37 -> .44; <24 px and busy surroundings unchanged), and false alarms (a
+    detection overlapping no label at IoU .3) .38 -> .83 per frame. Kept as the base: the
+    sizes are BAMBI's and the misses it fixes are real; the alarms are the next target.
+  - What the alarms are, on train frames: man-made things with hard edges (a row of
+    animal-sized hot objects along a hedge, seen in every frame of one flight; roofs and
+    high-seats; things on paved paths), bright branch forks, and label quirks (a whole herd
+    in one box, so each animal found is an alarm). The sim had nothing hard-edged.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

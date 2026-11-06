@@ -896,10 +896,12 @@ impl Shot {
     /// a herd of deer or boar (sometimes people and a dog) much warmer than the ground.
     fn forest(rng: &mut Rng, world: &World, kinds: &[Kind], posed: &[bool]) -> Self {
         let terrain = &world.terrain;
-        // a wide thermal lens; the frame's short side covers 15-60 m, so a deer is about
-        // 13-50 px long in the 640x512 render (BAMBI: median box side 42 px of 1024)
+        // a wide thermal lens; the frame's short side covers 20-90 m, so a deer is about
+        // 7-30 px long in the 640x512 render; boxes come out like BAMBI's (side about
+        // 1030 px m / cover + 16 px of margin, of 1024: BAMBI's 10th-90th percentile is
+        // 26-57 px, median 42; round 5's 10-60 m gave 36-105, median 58)
         let vfov_deg = rng.range(45.0, 52.0);
-        let cover_m = rng.range(10.0_f64.ln(), 60.0_f64.ln()).exp();
+        let cover_m = rng.range(20.0_f64.ln(), 90.0_f64.ln()).exp();
         let altitude_m = cover_m / 2.0 / (vfov_deg / 2.0).to_radians().tan();
         let pitch_deg = rng.range(87.0, 90.0);
         let aim = terrain.random_spot(rng, 100.0);
