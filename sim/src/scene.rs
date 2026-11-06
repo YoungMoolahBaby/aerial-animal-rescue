@@ -34,7 +34,7 @@ use bevy::render::view::Msaa;
 
 use crate::bodies::{self, Model};
 use crate::fields::{Layout, NoiseTable, OVERLAY_TEX};
-use crate::forest::{FOREST_TEX, ForestLook};
+use crate::forest::{CANOPY_TEX, FOREST_TEX, ForestLook};
 use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
@@ -61,6 +61,8 @@ const SUN_LUX: f32 = 80_000.0;
 const SKY_NITS: f32 = 25_000.0;
 const RGB_EV100: f32 = 15.0;
 const PATCH_TEXTURES: usize = 4;
+/// How far the painted ground floats above the terrain, metres.
+const PATCH_LIFT_M: f64 = 0.08;
 
 /// Which camera a run renders for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Resource)]
@@ -466,6 +468,8 @@ pub struct SceneHandles {
     patches: Vec<Handle<Image>>,
     /// RGB: the painted ground's mesh and image, and the noise it's painted from.
     overlay: Option<(Handle<Mesh>, Handle<Image>)>,
+    /// Forest: the leaf canopy's mesh, its picture (grey + alpha) and its id mask.
+    canopy: Option<(Handle<Mesh>, Handle<Image>, Handle<Image>)>,
     table: Option<NoiseTable>,
 }
 
@@ -894,7 +898,7 @@ impl Shot {
         // a wide thermal lens; the frame's short side covers 15-60 m, so a deer is about
         // 13-50 px long in the 640x512 render (BAMBI: median box side 42 px of 1024)
         let vfov_deg = rng.range(45.0, 52.0);
-        let cover_m = rng.range(15.0_f64.ln(), 60.0_f64.ln()).exp();
+        let cover_m = rng.range(10.0_f64.ln(), 60.0_f64.ln()).exp();
         let altitude_m = cover_m / 2.0 / (vfov_deg / 2.0).to_radians().tan();
         let pitch_deg = rng.range(87.0, 90.0);
         let aim = terrain.random_spot(rng, 100.0);
@@ -923,7 +927,11 @@ impl Shot {
         });
         let (centre, size) = footprint(&camera, vfov_deg, aim[1]);
         let table = NoiseTable::new(world.seed ^ 0xF0_4E57);
-        let look = ForestLook::random(rng, centre, size, sun, &table);
+        let mut look = ForestLook::random(rng, centre, size, sun, &table);
+        if let Some(c) = &mut look.canopy {
+            // low flights fly over the canopy, not through it
+            c.height_m = c.height_m.min(0.6 * altitude_m);
+        }
 
         let chosen = forest_targets(rng, kinds);
         let spread = cover_m / 2.0;
@@ -969,10 +977,14 @@ impl Shot {
             .collect();
 
         // bodies warmer than the window's top come out white, as BAMBI's mostly do
+        let leaves = (look.canopy_percentile(0.1), look.canopy_percentile(99.9));
         let window = TempWindow {
-            lo: look.percentile(0.1) - 0.5,
-            hi: look.percentile(99.9) + rng.range(1.0, 8.0),
+            lo: look.percentile(0.1).min(leaves.0.unwrap_or(f64::MAX)) - 0.5,
+            hi: look.percentile(99.9).max(leaves.1.unwrap_or(f64::MIN)) + rng.range(1.0, 8.0),
         };
+        // mottle on the bodies (the ground texture, `apply_temperatures`)
+        let (texture, speckle, texture_seed) =
+            (rng.range(0.05, 0.3), rng.range(0.0, 0.15), rng.next_u64());
         let conditions = Conditions {
             night,
             air_c: look.base_c,
@@ -980,9 +992,9 @@ impl Shot {
             sun_dir: sun.unwrap_or([0.0, 1.0, 0.0]),
             cooling_c: 0.0,
             patch_c: 0.0,
-            texture: 0.0,
-            speckle: 0.0,
-            texture_seed: 0,
+            texture,
+            speckle,
+            texture_seed,
             water: None,
         };
         Self {
@@ -1576,7 +1588,7 @@ pub fn spawn_scene(
     // terrain under the camera, a few centimetres up; rebuilt every shot
     let overlay = (rgb || forest).then(|| {
         let image = images.add(overlay_image(if forest { FOREST_TEX } else { OVERLAY_TEX }));
-        let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0));
+        let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0, PATCH_LIFT_M));
         let mat = mats.add(StandardMaterial {
             base_color: Color::WHITE,
             base_color_texture: Some(image.clone()),
@@ -1597,6 +1609,31 @@ pub fn spawn_scene(
             },
         ));
         (mesh, image)
+    });
+    // forest: a leaf canopy above the ground, cut out by its alpha; in the id look its
+    // leaves are background, so bodies under them get no pixels
+    let canopy = forest.then(|| {
+        let picture = images.add(overlay_image(CANOPY_TEX));
+        let mask = images.add(overlay_image(CANOPY_TEX));
+        let mesh = meshes.add(terrain_patch(world, [0.0, 0.0], 10.0, 10.0));
+        let leaves = |mats: &mut Assets<StandardMaterial>, color: Color, image: &Handle<Image>| {
+            mats.add(StandardMaterial {
+                base_color: color,
+                base_color_texture: Some(image.clone()),
+                unlit: true,
+                alpha_mode: AlphaMode::Mask(0.5),
+                cull_mode: None,
+                ..default()
+            })
+        };
+        let pic = leaves(mats, Color::WHITE, &picture);
+        let id = leaves(mats, Color::srgb(0.0, 1.0, 0.0), &mask);
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(pic.clone()),
+            Look { picture: pic, id },
+        ));
+        (mesh, picture, mask)
     });
 
     let block = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
@@ -1675,6 +1712,12 @@ pub fn spawn_scene(
     for (k, &kind) in kinds.iter().enumerate() {
         let id = k as u32 + 1;
         let materials = [(); 3].map(|_| picture(mats, modality));
+        // forest bodies are mottled (fur, wet patches; BAMBI's close boar are not flat white)
+        if forest {
+            for m in &materials {
+                mats.get_mut(m).unwrap().base_color_texture = Some(texture.clone());
+            }
+        }
         let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
         // drawn for model kinds too, so the primitive bodies after them stay the same
         let primitive = body_parts(meshes, &mut shapes, kind);
@@ -1737,6 +1780,7 @@ pub fn spawn_scene(
         clutter,
         patches,
         overlay,
+        canopy,
         table: rgb.then(|| NoiseTable::new(world.seed ^ 0x7AB1E)),
     });
 }
@@ -1760,10 +1804,10 @@ fn overlay_image(n: usize) -> Image {
     img
 }
 
-/// The terrain cells under a square (`centre`, `size` metres across), 8 cm above the
-/// terrain, with texture coordinates running 0-1 across the square. Built from the
+/// The terrain cells under a square (`centre`, `size` metres across), `lift` metres above
+/// the terrain, with texture coordinates running 0-1 across the square. Built from the
 /// terrain's own vertices, so it follows the ground exactly and never dips into it.
-fn terrain_patch(world: &World, centre: [f64; 2], size: f64) -> Mesh {
+fn terrain_patch(world: &World, centre: [f64; 2], size: f64, lift: f64) -> Mesh {
     let (w, d) = (world.terrain.field.width(), world.terrain.field.depth());
     let v0 = world.vertices[0];
     let (x0, z0) = (centre[0] - size / 2.0, centre[1] - size / 2.0);
@@ -1781,7 +1825,7 @@ fn terrain_patch(world: &World, centre: [f64; 2], size: f64) -> Mesh {
         for i in i0..=i1 {
             let p = world.vertices[j * w + i];
             let n = world.normals[j * w + i];
-            pos.push([p[0] as f32, (p[1] + 0.08) as f32, p[2] as f32]);
+            pos.push([p[0] as f32, (p[1] + lift) as f32, p[2] as f32]);
             normals.push([n[0] as f32, n[1] as f32, n[2] as f32]);
             uvs.push([((p[0] - x0) / size) as f32, ((p[2] - z0) / size) as f32]);
         }
@@ -2510,7 +2554,20 @@ impl SceneCtl<'_, '_> {
                 img.data = Some(look.rgba(|t| w.grey(t)));
             }
             if let Some(mut m) = self.meshes.get_mut(mesh) {
-                *m = terrain_patch(&self.world, look.centre, look.size);
+                *m = terrain_patch(&self.world, look.centre, look.size, PATCH_LIFT_M);
+            }
+        }
+        if let (Some(look), Some((mesh, picture, mask))) = (&shot.forest, &self.handles.canopy) {
+            let w = shot.window;
+            if let Some(mut img) = self.images.get_mut(picture) {
+                img.data = Some(look.canopy_rgba(|t| w.grey(t)));
+            }
+            if let Some(mut img) = self.images.get_mut(mask) {
+                img.data = Some(look.canopy_mask());
+            }
+            let lift = look.canopy.as_ref().map_or(1.0, |c| c.height_m);
+            if let Some(mut m) = self.meshes.get_mut(mesh) {
+                *m = terrain_patch(&self.world, look.centre, look.size, lift);
             }
         }
     }
@@ -2582,9 +2639,16 @@ impl SceneCtl<'_, '_> {
             let Some(p) = &shot.targets[target.id as usize - 1] else {
                 continue;
             };
+            // forest bodies carry the ground texture (mottle), so they make up for its base
+            let gain = if shot.forest.is_some() {
+                texture_gain()
+            } else {
+                1.0
+            };
             for (h, &t) in target.picture.iter().zip(&p.temp_c) {
                 if let Some(mut m) = self.mats.get_mut(h) {
-                    m.base_color = grey(t);
+                    let v = w.linear(t) * gain;
+                    m.base_color = Color::linear_rgb(v, v, v);
                 }
             }
         }
@@ -2628,7 +2692,7 @@ impl SceneCtl<'_, '_> {
                 img.data = Some(crate::fields::paint(l, table, OVERLAY_TEX));
             }
             if let Some(mut m) = self.meshes.get_mut(mesh) {
-                *m = terrain_patch(&self.world, l.centre, l.size);
+                *m = terrain_patch(&self.world, l.centre, l.size, PATCH_LIFT_M);
             }
         }
         let (_, mut water_vis) = self.water.single_mut().expect("one water surface");

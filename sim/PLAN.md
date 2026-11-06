@@ -1065,6 +1065,7 @@ dog, boar).
         | sim only v6 | .072 | .019 | .000 | .00 / .05 | .02 / .04 |
         | sim only forest round 1 | .095 | .019 | .007 | .01 / .09 | .25 / .16 |
         | sim only forest round 2 | .318 | .129 | .059 | .08 / .23 | .37 / .34 |
+        | sim only forest round 3 | .450 | .180 | .028 | .15 / .26 | .70 / .32 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1075,6 +1076,18 @@ dog, boar).
     - The margin is set from BAMBI train (box sizes, not detection scores); val was only
       scored. Alarms on BAMBI val's 13 empty frames: 1.0 per frame (too few frames to
       judge).
+  - Round 3, three changes at once, from round 2's misses on BAMBI train frames:
+    - a leaf canopy: an alpha-masked plane 8-20 m up (at most 0.6 x altitude), painted as
+      clumps of foliage with gaps, over 60% of litter shots, 30% of snow, 15% of meadow and
+      5% of field; 30-92% cover, mostly a few degrees warmer than the ground. Animals
+      under it are hidden in the id render too, so only the visible part is labelled.
+    - mottled bodies: the body takes the ground texture times a gain of 0.05-0.3.
+    - closer shots: short side of the footprint 10-60 m (round 2: 15-60 m).
+  - Animal AP50 .318 -> .450 and precision at conf .25 .37 -> .70 at about the same
+    recall. Alarms on the 13 empty val frames fell 1.0 -> 0.08 per frame. Person dropped
+    .059 -> .028 (189 boxes, 73 of them in one flight). Still missed on BAMBI train frames:
+    half of a packed herd (many lying, round), small animals under bright sunlit foliage,
+    and grey animals that are barely warmer than the ground.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

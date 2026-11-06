@@ -26,6 +26,21 @@ use crate::rng::{Rng, lattice};
 
 /// Texels across the painted ground (as `fields::OVERLAY_TEX`).
 pub const FOREST_TEX: usize = 2048;
+/// Texels across the canopy layer (coarser: leaves are drawn as clumps and gaps).
+pub const CANOPY_TEX: usize = 1024;
+
+/// A closed leaf canopy over part of the shot, `height_m` above the ground: clumps of
+/// foliage with gaps. Animals under it show only through the gaps (BAMBI's forest flights
+/// are full of faint animals seen between leaves, the most common miss of round 2).
+#[derive(Clone, Debug)]
+pub struct Canopy {
+    pub height_m: f64,
+    /// Share of the square covered by leaves.
+    pub cover: f64,
+    /// Temperatures and opacity (0 or 255) per texel, `CANOPY_TEX` squared.
+    pub temps: Arc<Vec<f32>>,
+    pub alpha: Arc<Vec<u8>>,
+}
 
 /// What the ground is covered with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +171,7 @@ pub struct ForestLook {
     pub n_debris: usize,
     /// The painted field, `FOREST_TEX` squared, row by row (z rows, x columns).
     pub field: Arc<Vec<f32>>,
+    pub canopy: Option<Canopy>,
 }
 
 impl ForestLook {
@@ -343,6 +359,35 @@ impl ForestLook {
             });
         }
 
+        // leaf canopy: mostly over forest floor
+        let canopy_p = match first {
+            Cover::Litter => 0.6,
+            Cover::Snow => 0.3,
+            Cover::Meadow => 0.15,
+            Cover::Field => 0.05,
+        };
+        let canopy = rng.chance(canopy_p).then(|| {
+            let cover = rng.range(0.3, 0.92);
+            let offset_c = if rng.chance(0.7) {
+                rng.range(1.0, 6.0)
+            } else {
+                -rng.range(1.0, 4.0)
+            };
+            let mottle_c = rng.range(0.5, 2.5);
+            let clump_m = rng.range(1.0, 3.0);
+            let height_m = rng.range(8.0, 20.0);
+            let seed = rng.next_u64();
+            let (temps, alpha) = paint_canopy(
+                centre, size, base_c, cover, offset_c, mottle_c, clump_m, seed, table,
+            );
+            Canopy {
+                height_m,
+                cover,
+                temps: Arc::new(temps),
+                alpha: Arc::new(alpha),
+            }
+        });
+
         let seed = rng.next_u64();
         let mut look = Self {
             centre,
@@ -360,6 +405,7 @@ impl ForestLook {
             n_trees,
             n_debris,
             field: Arc::new(Vec::new()),
+            canopy,
         };
         look.field = Arc::new(paint(&look, table, FOREST_TEX));
         look
@@ -385,6 +431,47 @@ impl ForestLook {
         v[k] as f64
     }
 
+    /// Percentile of the canopy's leaf temperatures, if it has one.
+    pub fn canopy_percentile(&self, pct: f64) -> Option<f64> {
+        let c = self.canopy.as_ref()?;
+        let mut v: Vec<f32> = c
+            .temps
+            .iter()
+            .zip(c.alpha.iter())
+            .step_by(7)
+            .filter(|(_, a)| **a >= 128)
+            .map(|(t, _)| *t)
+            .collect();
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(f32::total_cmp);
+        Some(v[((pct / 100.0) * (v.len() - 1) as f64).round() as usize] as f64)
+    }
+
+    /// The canopy as RGBA: grey through `grey`, alpha its leaves; all clear without one.
+    pub fn canopy_rgba(&self, grey: impl Fn(f64) -> f64) -> Vec<u8> {
+        let n = CANOPY_TEX * CANOPY_TEX;
+        let Some(c) = &self.canopy else {
+            return vec![0; n * 4];
+        };
+        let mut out = Vec::with_capacity(n * 4);
+        for (&t, &a) in c.temps.iter().zip(c.alpha.iter()) {
+            let g = (grey(t as f64).clamp(0.0, 1.0) * 255.0).round() as u8;
+            out.extend_from_slice(&[g, g, g, a]);
+        }
+        out
+    }
+
+    /// The canopy's leaves in white for the id look (alpha as in `canopy_rgba`).
+    pub fn canopy_mask(&self) -> Vec<u8> {
+        let n = CANOPY_TEX * CANOPY_TEX;
+        let Some(c) = &self.canopy else {
+            return vec![0; n * 4];
+        };
+        c.alpha.iter().flat_map(|&a| [255, 255, 255, a]).collect()
+    }
+
     /// The field as sRGB grey bytes (RGBA) through `grey` (temperature -> 0..1).
     pub fn rgba(&self, grey: impl Fn(f64) -> f64) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.field.len() * 4);
@@ -394,6 +481,56 @@ impl ForestLook {
         }
         out
     }
+}
+
+/// Leaf clumps over the square: noise at the clump scale plus finer lumps, cut at the
+/// level that leaves `cover` of it opaque, with small holes between leaves; leaves a
+/// little warmer or colder than the ground and mottled.
+#[allow(clippy::too_many_arguments)]
+fn paint_canopy(
+    centre: [f64; 2],
+    size: f64,
+    base_c: f64,
+    cover: f64,
+    offset_c: f64,
+    mottle_c: f64,
+    clump_m: f64,
+    seed: u64,
+    table: &NoiseTable,
+) -> (Vec<f32>, Vec<u8>) {
+    let n = CANOPY_TEX;
+    let ts = size / n as f64;
+    let (x0, z0) = (centre[0] - size / 2.0, centre[1] - size / 2.0);
+    let o = (seed % 83) as f64 * 2.7;
+    let mut level = Vec::with_capacity(n * n);
+    let mut temps = Vec::with_capacity(n * n);
+    for j in 0..n {
+        for i in 0..n {
+            let (x, z) = (x0 + (i as f64 + 0.5) * ts, z0 + (j as f64 + 0.5) * ts);
+            let l = 0.65 * table.at(x / clump_m + o, z / clump_m)
+                + 0.35 * table.at(x / (clump_m * 0.3) + o, z / (clump_m * 0.3) + 5.0);
+            level.push(l);
+            let mottle = table.at(x / 0.4 + o, z / 0.4 + 9.0);
+            temps.push((base_c + offset_c + mottle_c * mottle) as f32);
+        }
+    }
+    let mut sorted: Vec<f64> = level.iter().step_by(13).copied().collect();
+    sorted.sort_by(f64::total_cmp);
+    let cut = sorted[(((1.0 - cover) * (sorted.len() - 1) as f64).round() as usize).min(sorted.len() - 1)];
+    // opacity as a smooth ramp round the cut, so the renderer's bilinear read and the
+    // 0.5 alpha cut give smooth leaf edges at any distance; irregular gaps between leaves
+    // a couple of decimetres across
+    let alpha = level
+        .iter()
+        .enumerate()
+        .map(|(k, &l)| {
+            let (x, z) = (x0 + (k % n) as f64 * ts, z0 + (k / n) as f64 * ts);
+            let gap = table.at(x / 0.25 + o, z / 0.25 + 3.0);
+            let v = (l - cut) / 0.04 - (gap - 0.35).max(0.0) / 0.05;
+            ((0.5 + 0.5 * v.clamp(-1.0, 1.0)) * 255.0).round() as u8
+        })
+        .collect();
+    (temps, alpha)
 }
 
 /// A bare deciduous tree from above: 4-8 limbs from the trunk, each forking a few times,
@@ -682,6 +819,17 @@ mod tests {
         let (i, j) = (((1.0 + 20.0) / ts) as usize, ((1.0 + 20.0) / ts) as usize);
         assert_eq!(inside, look.field[j * n + i] as f64);
         assert_eq!(look.ground_at(500.0, 0.0), look.base_c);
+    }
+
+    #[test]
+    fn canopy_covers_about_its_share() {
+        let table = NoiseTable::new(5);
+        let (temps, alpha) =
+            paint_canopy([0.0, 0.0], 50.0, 5.0, 0.6, 3.0, 1.0, 2.0, 11, &table);
+        assert_eq!((temps.len(), alpha.len()), (CANOPY_TEX * CANOPY_TEX, CANOPY_TEX * CANOPY_TEX));
+        let share = alpha.iter().filter(|&&a| a >= 128).count() as f64 / alpha.len() as f64;
+        // the cut leaves 60%, the gaps between leaves take some of that
+        assert!((0.4..0.62).contains(&share), "{share}");
     }
 
     #[test]
