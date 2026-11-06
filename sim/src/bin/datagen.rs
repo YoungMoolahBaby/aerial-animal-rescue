@@ -52,7 +52,7 @@ const RGB_LABEL_MARGIN: f32 = 1.0;
 const FOREST_LABEL_MARGIN: f32 = 5.0;
 const THERMAL_PARAMS: &str = "image_id,night,air_c,sun_c,water,texture,vfov_deg,altitude_m,pitch_deg,\
     targets,boxes,blur,motion_px,interlace_px,video_q,noise,out_noise,blotch,blotch_px,fpn_col,agc_lo,agc_hi,out_lo,out_hi,jpeg,bodies,haze,faint\n";
-const FOREST_PARAMS: &str = "image_id,night,sun,covers,trees,debris,vfov_deg,altitude_m,pitch_deg,    targets,boxes,blur,motion_px,video_q,noise,out_noise,blotch,agc_lo,agc_hi,out_lo,out_hi,jpeg,window_lo,window_hi
+const FOREST_PARAMS: &str = "image_id,night,sun,covers,trees,debris,man_made,vfov_deg,altitude_m,pitch_deg,    targets,boxes,blur,motion_px,video_q,noise,out_noise,blotch,agc_lo,agc_hi,out_lo,out_hi,jpeg,window_lo,window_hi
 ";
 const RGB_PARAMS: &str = "image_id,field,sun,sky,sun_elev_deg,vfov_deg,altitude_m,pitch_deg,targets,boxes,\
     bales,yard_sheds,yard_targets,wb_r,wb_b,median,vignette,circle,blur,haze,contrast,saturation,noise,jpeg,bodies\n";
@@ -439,11 +439,12 @@ fn write_forest_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
     };
     writeln!(
         dg.params,
-        "{image_id},{},{},{covers},{},{},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{:.1},{:.1}",
+        "{image_id},{},{},{covers},{},{},{},{:.1},{:.1},{:.1},{},{},{:.2},{:.2},{},{:.2},{:.2},{:.2},{:.2},{:.2},{:.0},{:.0},{},{:.1},{:.1}",
         c.night,
         c.sun_dir[1] < 0.999,
         look.n_trees,
         look.n_debris,
+        look.n_man_made,
         shot.vfov_deg,
         shot.altitude_m,
         shot.pitch_deg,

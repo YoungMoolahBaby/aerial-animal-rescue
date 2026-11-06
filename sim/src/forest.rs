@@ -12,7 +12,10 @@
 //! - conifer crowns: round, spiky, warm or cold, and by day their cold shadows;
 //! - paths and forest tracks with wheel ruts;
 //! - logs, stumps and rocks, some as warm as an animal (BAMBI's "No-animal" boxes are
-//!   rocks and stumps that look like animals), so the model learns they aren't.
+//!   rocks and stumps that look like animals), so the model learns they aren't;
+//! - man-made things with hard edges in about a third of the shots: bales or boxes in a
+//!   row, often along a track, benches and feeders, a high-seat, a car, a roof (most of a
+//!   round-6 model's false alarms on BAMBI train frames were things like these).
 //!
 //! Temperatures are plausible, not physical. What has to match is how animals stand out:
 //! BAMBI's animals are near white (95th percentile grey 222 at the median) on a darker,
@@ -174,6 +177,27 @@ struct Blob {
     spiky: bool,
 }
 
+/// A hard-edged, flat-coloured rectangle (or disc) drawn into the field: a man-made thing
+/// seen from above, or its shadow.
+#[derive(Clone, Copy, Debug)]
+struct Slab {
+    centre: [f64; 2],
+    /// Half lengths along and across `angle`, metres (a disc: radius `half[0]`).
+    half: [f64; 2],
+    angle: f64,
+    round: bool,
+    offset_c: f64,
+    /// A roof's two slopes: the half on the positive side across `angle` is this much
+    /// warmer than the other.
+    ridge_c: f64,
+    /// The shape is swept along this (metres): a shadow cast from the thing's top.
+    sweep: [f64; 2],
+    /// Edge width, metres (0: one texel).
+    soft_m: f64,
+    /// Share of the ground's texture kept through it.
+    keep: f64,
+}
+
 /// The layout of one forest shot, in metres; `paint` turns it into temperatures.
 #[derive(Clone, Debug)]
 pub struct ForestLook {
@@ -185,13 +209,16 @@ pub struct ForestLook {
     pub covers: [Cover; 2],
     surfaces: [Surface; 2],
     edge: Option<Edge>,
-    /// On the ground, drawn in order: shadows, tracks, debris. Conifer crowns and bare
-    /// branches are drawn over the leaves into the canopy layer.
+    /// On the ground, drawn in order: shadows, tracks, debris, man-made things (their
+    /// shadows first). Conifer crowns and bare branches are drawn over the leaves into the
+    /// canopy layer.
     shadows: Vec<Blob>,
     tracks: Vec<Stroke>,
     debris: Vec<Blob>,
+    slabs: Vec<Slab>,
     pub n_trees: usize,
     pub n_debris: usize,
+    pub n_man_made: usize,
     /// The painted field, `FOREST_TEX` squared, row by row (z rows, x columns).
     pub field: Arc<Vec<f32>>,
     pub canopy: Option<Canopy>,
@@ -382,6 +409,43 @@ impl ForestLook {
             });
         }
 
+        // man-made things in about a third of the shots, by day with their shadows
+        let things = if rng.chance(0.35) {
+            man_made(rng, (centre, size), &tracks)
+        } else {
+            Vec::new()
+        };
+        let n_man_made = things.iter().filter(|(_, h, _)| *h > 0.0).count();
+        let mut slabs = Vec::new();
+        if let Some(s) = sun {
+            let elev = s[1].asin().max(0.2);
+            let len = s[0].hypot(s[2]).max(1e-6);
+            let away = [-s[0] / len, -s[2] / len];
+            for (t, height, stilts) in &things {
+                if *height <= 0.0 {
+                    continue;
+                }
+                let reach = (height / elev.tan()).min(4.0 * height);
+                let shift = [away[0] * reach, away[1] * reach];
+                slabs.push(Slab {
+                    // a roof on stilts throws its own shadow off to the side; a thing
+                    // standing on the ground, one joined to it
+                    centre: if *stilts {
+                        [t.centre[0] + shift[0], t.centre[1] + shift[1]]
+                    } else {
+                        t.centre
+                    },
+                    offset_c: -shadow_c,
+                    ridge_c: 0.0,
+                    sweep: if *stilts { [0.0, 0.0] } else { shift },
+                    soft_m: 0.15,
+                    keep: 0.4,
+                    ..*t
+                });
+            }
+        }
+        slabs.extend(things.iter().map(|(t, _, _)| *t));
+
         // leaf canopy: mostly over forest floor
         let canopy_p = match first {
             Cover::Litter => 0.6,
@@ -440,8 +504,10 @@ impl ForestLook {
             shadows,
             tracks,
             debris,
+            slabs,
             n_trees,
             n_debris,
+            n_man_made,
             field: Arc::new(Vec::new()),
             canopy,
         };
@@ -636,6 +702,143 @@ fn branch(
     }
 }
 
+/// Man-made things for one shot over the square (`centre`, `size`), each with its height
+/// (0 for a part of another thing, such as a car's windscreen: no shadow of its own) and
+/// whether it stands on stilts. BAMBI's train frames show bales or boxes in a row along a
+/// hedge or a track, roofs, high-seats and things on paths, and a model trained without
+/// them takes them for animals: they are about an animal's size and often as warm.
+fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(Slab, f64, bool)> {
+    let (centre, size) = square;
+    // mostly sun-warmed or holding the day's heat, some cold (wet, or metal and glass
+    // under a clear night sky)
+    let temp = |rng: &mut Rng, hot: f64| {
+        if rng.chance(0.7) {
+            rng.range(1.5_f64.ln(), hot.ln()).exp()
+        } else {
+            -rng.range(1.0, 5.0)
+        }
+    };
+    let slab = |centre: [f64; 2], half: [f64; 2], angle: f64, offset_c: f64| Slab {
+        centre,
+        half,
+        angle,
+        round: false,
+        offset_c,
+        ridge_c: 0.0,
+        sweep: [0.0, 0.0],
+        soft_m: 0.0,
+        keep: 0.1,
+    };
+    let mut out = Vec::new();
+    let u = rng.unit();
+    if u < 0.4 {
+        // a row of bales or boxes, half the time beside a track
+        let n = 2 + rng.index(7);
+        let round = rng.chance(0.4);
+        let half = if round {
+            let r = rng.range(0.55, 0.9);
+            [r, r]
+        } else {
+            [rng.range(0.5, 1.1), rng.range(0.35, 0.7)]
+        };
+        let pieces = tracks.len() / 3;
+        let (start, dir) = if pieces > 0 && rng.chance(0.5) {
+            // the tracks are pieces of three strokes: the track, then its two ruts
+            let s = &tracks[3 * rng.index(pieces)];
+            let (dx, dz) = (s.b[0] - s.a[0], s.b[1] - s.a[1]);
+            let len = dx.hypot(dz).max(1e-6);
+            let side = if rng.chance(0.5) { 1.0 } else { -1.0 };
+            let off = side * (s.width / 2.0 + half[1] + rng.range(0.5, 3.0));
+            let t = rng.range(0.0, 0.5);
+            (
+                [
+                    s.a[0] + dx * t - dz / len * off,
+                    s.a[1] + dz * t + dx / len * off,
+                ],
+                dz.atan2(dx),
+            )
+        } else {
+            (
+                [
+                    centre[0] + rng.range(-0.4, 0.4) * size,
+                    centre[1] + rng.range(-0.4, 0.4) * size,
+                ],
+                rng.range(0.0, TAU),
+            )
+        };
+        let across = rng.chance(0.5);
+        let step = 2.0 * if across { half[1] } else { half[0] } + rng.range(0.3, 5.0);
+        let row_c = temp(rng, 14.0);
+        let height = rng.range(0.8, 1.5);
+        for k in 0..n {
+            let (along, aside) = (k as f64 * step, rng.range(-0.3, 0.3));
+            let at = [
+                start[0] + dir.cos() * along - dir.sin() * aside,
+                start[1] + dir.sin() * along + dir.cos() * aside,
+            ];
+            let angle = dir + if across { PI / 2.0 } else { 0.0 } + rng.range(-0.15, 0.15);
+            let mut s = slab(at, half, angle, row_c * rng.range(0.8, 1.2));
+            s.round = round;
+            out.push((s, height, false));
+        }
+    } else if u < 0.65 {
+        // a few small things: feeders, benches, boxes, tarps
+        for _ in 0..1 + rng.index(4) {
+            let at = [
+                centre[0] + rng.range(-0.4, 0.4) * size,
+                centre[1] + rng.range(-0.4, 0.4) * size,
+            ];
+            let round = rng.chance(0.15);
+            let half = if round {
+                let r = rng.range(0.3, 0.7);
+                [r, r]
+            } else {
+                [rng.range(0.3, 1.2), rng.range(0.2, 0.6)]
+            };
+            let mut s = slab(at, half, rng.range(0.0, TAU), temp(rng, 14.0));
+            s.round = round;
+            out.push((s, rng.range(0.3, 1.2), false));
+        }
+    } else if u < 0.8 {
+        // a high-seat: a small roof on stilts
+        let h = rng.range(0.7, 1.3);
+        let at = [
+            centre[0] + rng.range(-0.4, 0.4) * size,
+            centre[1] + rng.range(-0.4, 0.4) * size,
+        ];
+        let mut s = slab(at, [h, h * rng.range(0.8, 1.0)], rng.range(0.0, TAU), temp(rng, 10.0));
+        s.ridge_c = rng.range(1.0, 4.0) * if rng.chance(0.5) { 1.0 } else { -1.0 };
+        out.push((s, rng.range(3.5, 7.0), true));
+    } else if u < 0.9 {
+        // a car: a warm body (engine, sun), a cold windscreen (glass shows the sky)
+        let at = [
+            centre[0] + rng.range(-0.4, 0.4) * size,
+            centre[1] + rng.range(-0.4, 0.4) * size,
+        ];
+        let angle = rng.range(0.0, TAU);
+        let len = rng.range(2.0, 2.4);
+        let body_c = temp(rng, 12.0);
+        out.push((slab(at, [len, rng.range(0.85, 0.95)], angle, body_c), 1.5, false));
+        let glass = [
+            at[0] + angle.cos() * len * 0.3,
+            at[1] + angle.sin() * len * 0.3,
+        ];
+        let glass_c = body_c - rng.range(2.0, 8.0);
+        out.push((slab(glass, [0.35, 0.75], angle, glass_c), 0.0, false));
+    } else {
+        // a roof: two slopes, one sunlit
+        let at = [
+            centre[0] + rng.range(-0.4, 0.4) * size,
+            centre[1] + rng.range(-0.4, 0.4) * size,
+        ];
+        let half = [rng.range(3.0, 8.0), rng.range(2.5, 6.0)];
+        let mut s = slab(at, half, rng.range(0.0, TAU), rng.range(-4.0, 8.0));
+        s.ridge_c = rng.range(1.0, 5.0) * if rng.chance(0.5) { 1.0 } else { -1.0 };
+        out.push((s, rng.range(4.0, 9.0), false));
+    }
+    out
+}
+
 /// Paint the layout's temperatures into an `n` x `n` field over its square.
 pub fn paint(look: &ForestLook, table: &NoiseTable, n: usize) -> Vec<f32> {
     let ts = look.size / n as f64;
@@ -682,6 +885,11 @@ pub fn paint(look: &ForestLook, table: &NoiseTable, n: usize) -> Vec<f32> {
     for b in &look.debris {
         blob(n, ts, at, b, table, look.seed, |k, cov, texture| {
             mark(&mut field, k, cov, base + b.offset_c * texture, 0.4)
+        });
+    }
+    for s in &look.slabs {
+        slab(n, ts, at, s, |k, cov, side| {
+            mark(&mut field, k, cov, base + s.offset_c + side * s.ridge_c / 2.0, s.keep)
         });
     }
     field
@@ -897,6 +1105,55 @@ fn blob(
     }
 }
 
+/// A slab's coverage, antialiased over a texel (or `soft_m`): calls `put(texel, coverage,
+/// side)` over the texels it touches, `side` +1 or -1 across its long axis (a roof's two
+/// slopes). A swept slab covers every place along its sweep (a shadow).
+fn slab(
+    n: usize,
+    ts: f64,
+    at: impl Fn([f64; 2]) -> (f64, f64),
+    s: &Slab,
+    mut put: impl FnMut(usize, f64, f64),
+) {
+    let (cx, cy) = at(s.centre);
+    let r = (s.half[0].max(s.half[1]) * 1.42 + s.soft_m) / ts + 2.0;
+    let (wx, wy) = (s.sweep[0] / ts, s.sweep[1] / ts);
+    let (i0, i1) = (cx + wx.min(0.0) - r, cx + wx.max(0.0) + r);
+    let (j0, j1) = (cy + wy.min(0.0) - r, cy + wy.max(0.0) + r);
+    if i1 < 0.0 || j1 < 0.0 || i0 >= n as f64 || j0 >= n as f64 {
+        return;
+    }
+    let (c, sn) = (s.angle.cos(), s.angle.sin());
+    // steps along the sweep a quarter of the thing's width, so its sides come out straight
+    let steps = (s.sweep[0].hypot(s.sweep[1]) / (0.25 * s.half[0].min(s.half[1])).max(ts))
+        .ceil()
+        .min(256.0) as usize;
+    let edge = ts.max(s.soft_m);
+    let dist = |px: f64, py: f64| {
+        let (u, v) = (px * c + py * sn, -px * sn + py * c);
+        if s.round {
+            u.hypot(v) - s.half[0]
+        } else {
+            (u.abs() - s.half[0]).max(v.abs() - s.half[1])
+        }
+    };
+    for j in (j0.max(0.0) as usize)..=(j1.min(n as f64 - 1.0) as usize) {
+        for i in (i0.max(0.0) as usize)..=(i1.min(n as f64 - 1.0) as usize) {
+            let (px, py) = ((i as f64 + 0.5 - cx) * ts, (j as f64 + 0.5 - cy) * ts);
+            let mut d = dist(px, py);
+            for k in 1..=steps {
+                let t = k as f64 / steps as f64;
+                d = d.min(dist(px - t * s.sweep[0], py - t * s.sweep[1]));
+            }
+            let cov = (0.5 - d / edge).clamp(0.0, 1.0);
+            if cov > 0.0 {
+                let side = if -px * sn + py * c >= 0.0 { 1.0 } else { -1.0 };
+                put(j * n + i, cov, side);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,6 +1255,90 @@ mod tests {
             .find(|l| l.n_trees == 0)
             .expect("an open shot");
         assert!(open.canopy.as_ref().is_none_or(|c| c.cover > 0.0));
+    }
+
+    #[test]
+    fn slabs_are_hard_edged_and_shadows_sweep() {
+        let (n, ts) = (240, 0.05);
+        let at = |p: [f64; 2]| (p[0] / ts, p[1] / ts);
+        let s = Slab {
+            centre: [5.0, 5.0],
+            half: [1.0, 0.5],
+            angle: 0.4,
+            round: false,
+            offset_c: 3.0,
+            ridge_c: 2.0,
+            sweep: [0.0, 0.0],
+            soft_m: 0.0,
+            keep: 0.1,
+        };
+        let (mut area, mut edge, mut sides) = (0.0, 0usize, [0usize; 2]);
+        slab(n, ts, at, &s, |_, cov, side| {
+            area += cov * ts * ts;
+            edge += (cov < 1.0) as usize;
+            sides[(side > 0.0) as usize] += 1;
+        });
+        assert!((area - 2.0).abs() < 0.02, "{area}");
+        // the edge is about a texel wide all round (6 m of it)
+        assert!((edge as f64) < 1.6 * 6.0 / ts, "{edge}");
+        // a roof's two slopes are the same size
+        assert!((sides[0] as f64 / sides[1] as f64 - 1.0).abs() < 0.1, "{sides:?}");
+        // a disc swept 4 m covers a capsule
+        let shadow = Slab {
+            round: true,
+            half: [1.0, 1.0],
+            sweep: [4.0, 0.0],
+            soft_m: 0.15,
+            ..s
+        };
+        let mut area = 0.0;
+        slab(n, ts, at, &shadow, |_, cov, _| area += cov * ts * ts);
+        let capsule = PI + 2.0 * 4.0;
+        assert!((area - capsule).abs() < 0.03 * capsule, "{area} vs {capsule}");
+    }
+
+    #[test]
+    fn man_made_things_look_like_animals_or_are_bigger() {
+        let mut rng = Rng::new(5);
+        let track = Stroke {
+            a: [-20.0, 0.0],
+            b: [20.0, 0.0],
+            width: 3.0,
+            offset_c: 1.0,
+        };
+        let (mut all, mut warm, mut cold) = (0, 0, 0);
+        for _ in 0..400 {
+            let things = man_made(&mut rng, ([0.0, 0.0], 60.0), &[track; 3]);
+            assert!(!things.is_empty());
+            for (s, h, _) in &things {
+                assert!((0.3..=8.0).contains(&s.half[0]) && (0.2..=6.0).contains(&s.half[1]));
+                assert!((0.0..=9.0).contains(h));
+                all += 1;
+                warm += (s.offset_c >= 4.0) as usize;
+                cold += (s.offset_c < 0.0) as usize;
+            }
+        }
+        let (warm, cold) = (warm as f64 / all as f64, cold as f64 / all as f64);
+        assert!((0.25..0.6).contains(&warm), "warm as an animal {warm}");
+        assert!((0.15..0.45).contains(&cold), "cold {cold}");
+    }
+
+    #[test]
+    fn man_made_things_are_painted() {
+        let table = NoiseTable::new(6);
+        // the last one drawn inside the square (rows run on past its edge; nothing drawn
+        // later covers a thing's centre)
+        let (look, s) = (0..60)
+            .map(|k| ForestLook::random(&mut Rng::new(k), [0.0, 0.0], 40.0, None, &table))
+            .find_map(|l| {
+                let inside = |s: &&Slab| s.centre[0].abs() < 18.0 && s.centre[1].abs() < 18.0;
+                let s = *l.slabs.iter().rev().find(inside)?;
+                Some((l, s))
+            })
+            .expect("a shot with man-made things");
+        let got = look.ground_at(s.centre[0], s.centre[1]);
+        let want = look.base_c + s.offset_c;
+        assert!((got - want).abs() <= s.ridge_c.abs() / 2.0 + 1.0, "{got} vs {want}");
     }
 
     #[test]

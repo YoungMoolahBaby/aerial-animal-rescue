@@ -1071,6 +1071,7 @@ dog, boar).
         | sim only forest round 4b (tussocks only) | .459 | .184 | .013 | .14 / .27 | .69 / .35 |
         | sim only forest round 5 (crowns overhead) | .488 | .198 | .046 | .17 / .29 | .66 / .41 |
         | sim only forest round 6 (BAMBI-sized animals) | .481 | .193 | .063 | .19 / .28 | .55 / .48 |
+        | sim only forest round 7 (man-made things) | .508 | .209 | .010 | .16 / .29 | .60 / .48 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1141,6 +1142,18 @@ dog, boar).
     animal-sized hot objects along a hedge, seen in every frame of one flight; roofs and
     high-seats; things on paved paths), bright branch forks, and label quirks (a whole herd
     in one box, so each animal found is an alarm). The sim had nothing hard-edged.
+  - Round 7, man-made things in 35% of the shots: hard-edged, flat-coloured rectangles and
+    discs, antialiased over a texel. A row of 2-8 bales or boxes (half the time beside a
+    track), 1-4 benches, feeders or boxes, a high-seat (a two-slope roof on stilts), a car
+    (warm body, cold windscreen) or a roof 5-16 m long; 70% warmer than the ground by
+    1.5-14 °C (log-uniform), the rest 1-5 °C colder. By day each throws a shadow away
+    from the sun: joined to it, or off to the side for a roof on stilts.
+  - Animal AP50 .481 -> .508 (3x the seed noise), AP50-95 .209, precision at .25 .55 ->
+    .60 at the same recall: sim alone now passes real data plus all of BAMBI train
+    (.498). On the 600 train frames false alarms fell .83 -> .62 per frame (round 5:
+    .38) and recall .500 -> .463; busy surroundings are still the weakest (.33).
+    Person .010: one flight holds 73 of the 189 person boxes, and person moves by
+    several hundredths between seeds, so it is not judged here.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
