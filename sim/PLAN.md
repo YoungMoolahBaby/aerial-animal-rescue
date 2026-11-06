@@ -1012,6 +1012,26 @@ dog, boar).
       sim images of processed_sim_p6), seeds 0 and 1, same settings as `bambi`. Lists on
       D:/aar/scarce/, configs runs/scarce_bambi*.yaml. Judged on BAMBI val animal and
       person AP50 (full BAMBI .498 / .211, no BAMBI ~.05 / .01).
+    - Result (2026-11-06, runs/eval/bambi_val2/ and runs/eval/full_val/, 60 epochs each):
+
+          | BAMBI val | animal AP50 | person AP50 | small / medium | flight median |
+          |---|---|---|---|---|
+          | no BAMBI (split2) | .049 | .011 | .02 / .06 | |
+          | scarce, no sim (s0 / s1) | .184 / .137 | .030 / .057 | .02-.04 / .15-.16 | .08 / .04 |
+          | scarce + sim v6 (s0 / s1) | .247 / .195 | .053 / .054 | .05-.06 / .16-.22 | .14 / .09 |
+          | full BAMBI (bambi) | .498 | .211 | .28 / .39 | .39 |
+
+      Full val (all sources): scarce .525 / .530, scarce + sim .555 / .540, full .588;
+      alarms per empty image .11-.13 for all.
+    - The thermal sim helps where in-domain data is scarce: animals +.06 on both seeds
+      (paired), small animals doubled, better on 14 of 25 val flights with >= 20 boxes
+      and worse on 3. But it closes only ~18% of the gap to full BAMBI (.16 -> .22 of
+      .50), against ~60% for the RGB sim with cattle. People don't move (.03-.06).
+    - So 131 real frames from 5 flights are worth far more than 4,000 sim images, and
+      the sim's European-forest animals are still far from real ones. Candidates: deer
+      and boar shapes and sizes seen from straight above, canopy occlusion (BAMBI keeps
+      half-hidden animals labelled), forest-floor thermal texture. BAMBI val is the
+      cheap measure for each change (sim-only zero-shot, then this scarce setting).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
