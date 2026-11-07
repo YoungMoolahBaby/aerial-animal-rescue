@@ -1074,6 +1074,7 @@ dog, boar).
         | sim only forest round 7 (man-made things) | .508 | .209 | .010 | .16 / .29 | .60 / .48 |
         | sim only forest round 8 (camera detail enhancement) | .505 | .195 | .028 | .20 / .28 | .61 / .48 |
         | sim only forest round 9 (animals' shadows) | .540 | .213 | .037 | .20 / .29 | .61 / .52 |
+        | sim only forest round 10 (big herds) | .529 | .206 | .048 | .20 / .31 | .63 / .49 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1194,6 +1195,20 @@ dog, boar).
     4-12 and 5% with 13 or more, but by boxes 30% / 45% / 25%: a quarter of the animals
     stand in herds of 13 or more (up to 59, flight 17). The sim's pool held 12 deer and
     12 boar, its herds uniform 1-12 (frames 23% / 77% / 0%, boxes 6% / 94% / 0%).
+  - Round 10, big herds: the forest pool holds 28 deer and 28 boar (the forest's id
+    render steps red by 4, not 8, to fit them; `Modality::id_step`), and one herd in ten
+    is 13-28 strong, spread out as the root of its size. Labelled frames with animals
+    now split 29% / 61% / 10% by herd size, boxes 8% / 64% / 28% (BAMBI train 30% / 45% /
+    25%).
+  - Animal AP50 .540 -> .529, AP50-95 .213 -> .206 (both within the seed noise); recall
+    at .25 .52 -> .49, precision .61 -> .63; medium .29 -> .31. On the 600 train frames
+    recall .516 -> .477 (40-64 px .62 -> .55, under 24 px .11 -> .05), but flight 17,
+    the 59-deer herd, .49 -> .74, and false alarms .85 -> .49 per frame. Kept: val
+    holds, and the herds are BAMBI's.
+  - The single animals are still missing: half of the 600 train frames' animal boxes
+    have no other box centre within 1.5 sides of theirs (recall .44, against .50-.54
+    with neighbours), and 71% of BAMBI train's frames with animals hold 1-3 of them, the
+    sim's 29%.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

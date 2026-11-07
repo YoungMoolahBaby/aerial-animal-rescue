@@ -3,7 +3,8 @@
 //!
 //! - **thermal**: unlit grey = temperature through the shot's window (`thermal.rs`); the
 //!   sensor model runs on the captured frame afterwards (`sensor.rs`);
-//! - **id**: target `k` in red `k * ID_STEP`, everything else green with red 0. Captured
+//! - **id**: target `k` in red `k` times the modality's id step, everything else green
+//!   with red 0 (the canopy white, which decodes past the last target). Captured
 //!   right after the thermal frame, it gives a visible-pixel mask per target, so boxes are
 //!   tight and hidden targets (behind a hill, a tree, under water) get no box.
 //!
@@ -110,6 +111,16 @@ impl Modality {
         pool.iter()
             .flat_map(|&(k, n)| std::iter::repeat_n(k, n))
             .collect()
+    }
+
+    /// Red step between target ids in the id render: room for small colour errors, and
+    /// few enough steps for the pool (the forest's big herds need 4; the others keep
+    /// `ID_STEP`, so their pools render as before).
+    pub fn id_step(self) -> u8 {
+        match self {
+            Self::Forest => 4,
+            Self::Thermal | Self::Rgb => ID_STEP,
+        }
     }
 
     fn clutter(self) -> &'static [(ClutterKind, usize)] {
@@ -221,13 +232,14 @@ pub const RGB_POOL: [(Kind, usize); 5] = [
     (Kind::Dog, 2),
 ];
 
-/// The forest pool: herds of deer and boar like BAMBI's (up to a dozen in a frame), a few
-/// people and dogs.
+/// The forest pool: herds of deer and boar like BAMBI's (mostly up to a dozen in a frame,
+/// but a quarter of BAMBI train's animal boxes are in frames of 13 or more, up to 59), a
+/// few people and dogs.
 pub const FOREST_POOL: [(Kind, usize); 4] = [
     (Kind::Person, 3),
     (Kind::Dog, 2),
-    (Kind::Deer, 12),
-    (Kind::Boar, 12),
+    (Kind::Deer, 28),
+    (Kind::Boar, 28),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -942,8 +954,11 @@ impl Shot {
             aim[0] + rng.range(-0.8, 0.8) * spread,
             aim[2] + rng.range(-0.8, 0.8) * spread,
         );
-        // herds stand close: a few metres for boar, wider for deer
-        let herd_r = rng.range(1.5, 12.0_f64.min(spread));
+        // herds stand close: a few metres for boar, wider for deer, and big herds spread
+        // out (as the root of their size)
+        let n_on = chosen.iter().filter(|&&c| c).count() as f64;
+        let herd_r =
+            (rng.range(1.5, 12.0_f64.min(spread)) * (n_on / 6.0).sqrt().max(1.0)).min(spread);
         let targets: Vec<Option<Placement>> = kinds
             .iter()
             .zip(&chosen)
@@ -1076,7 +1091,14 @@ fn forest_targets(rng: &mut Rng, kinds: &[Kind]) -> Vec<bool> {
             Kind::Boar
         };
         let most = kinds.iter().filter(|&&k| k == herd).count();
-        return first_n(herd, 1 + rng.index(most));
+        // up to a dozen, and one herd in ten bigger: about a quarter of the herd animals
+        // then stand in herds of 13 or more, as in BAMBI train
+        let n = if most > 12 && rng.chance(0.1) {
+            13 + rng.index(most - 12)
+        } else {
+            1 + rng.index(most.min(12))
+        };
+        return first_n(herd, n);
     }
     let mut chosen: Vec<bool> = kinds.iter().map(|_| rng.chance(0.25)).collect();
     if !chosen.contains(&true) {
@@ -1510,7 +1532,7 @@ pub fn spawn_scene(
     modality: Modality,
 ) {
     assert!(
-        kinds.len() * ID_STEP as usize <= 255,
+        kinds.len() * modality.id_step() as usize <= 255,
         "too many targets for the id render"
     );
     let rgb = modality == Modality::Rgb;
@@ -1753,7 +1775,7 @@ pub fn spawn_scene(
                 mats.get_mut(m).unwrap().base_color_texture = Some(texture.clone());
             }
         }
-        let id_mat = unlit(mats, Color::srgb_u8(id as u8 * ID_STEP, 0, 0));
+        let id_mat = unlit(mats, Color::srgb_u8(id as u8 * modality.id_step(), 0, 0));
         // drawn for model kinds too, so the primitive bodies after them stay the same
         let primitive = body_parts(meshes, &mut shapes, kind);
         let modelled = model_variants.iter().find(|(k, _)| *k == kind);
@@ -2988,8 +3010,11 @@ mod tests {
     #[test]
     fn pool_fits_the_id_render() {
         assert_eq!(pool(), Modality::Thermal.kinds());
-        for m in [Modality::Thermal, Modality::Rgb] {
-            assert!(m.kinds().len() * (ID_STEP as usize) <= 255);
+        for m in [Modality::Thermal, Modality::Rgb, Modality::Forest] {
+            assert!(m.kinds().len() * (m.id_step() as usize) <= 255);
+            // the canopy's white decodes past the last target
+            let white = (255.0 / m.id_step() as f32).round() as usize;
+            assert!(white > m.kinds().len(), "{m:?}");
         }
     }
 

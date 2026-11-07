@@ -33,7 +33,7 @@ use storm_sim::capture::{PixelBox, PoolWriter, Record, boxes_from_id_mask, id_ma
 use storm_sim::rgb::{self, RgbParams};
 use storm_sim::rng::Rng;
 use storm_sim::scene::{
-    self, BodyModels, ClutterKind, ID_STEP, IMAGE_H, IMAGE_W, Modality, SceneCtl, Shot, World,
+    self, BodyModels, ClutterKind, IMAGE_H, IMAGE_W, Modality, SceneCtl, Shot, World,
 };
 use storm_sim::sensor::{self, SensorParams};
 
@@ -278,7 +278,7 @@ fn drive(
                         }
                         .unwrap();
                     }
-                    let mask = id_mask_from_rgb(raw, ID_STEP);
+                    let mask = id_mask_from_rgb(raw, dg.modality.id_step());
                     let boxes: Vec<PixelBox> =
                         boxes_from_id_mask(&mask, width as usize, MIN_PIXELS)
                             .into_iter()
