@@ -588,7 +588,12 @@ mod tests {
         let e = enhance(&img, w, h, &p);
         let at = |x: usize, y: usize| e[y * w + x];
         // brighter rim than middle, a dark halo outside, flat ground far off unchanged
-        assert!(at(21, 30) > at(30, 30) + 20.0, "{} {}", at(21, 30), at(30, 30));
+        assert!(
+            at(21, 30) > at(30, 30) + 20.0,
+            "{} {}",
+            at(21, 30),
+            at(30, 30)
+        );
         assert!(at(18, 30) < 90.0, "{}", at(18, 30));
         assert!((at(5, 5) - 100.0).abs() < 1e-3);
     }
@@ -616,7 +621,10 @@ mod tests {
             .fold(f32::MIN, f32::max);
         let body = e[30 * w + 30];
         // the body is still the warmest thing, but only just
-        assert!(body > ground_max && body - ground_max < 0.2 * (250.0 - 110.0), "{body} {ground_max}");
+        assert!(
+            body > ground_max && body - ground_max < 0.2 * (250.0 - 110.0),
+            "{body} {ground_max}"
+        );
         // and the range is kept
         assert!(e.iter().all(|&v| (89.0..=251.0).contains(&v)));
     }

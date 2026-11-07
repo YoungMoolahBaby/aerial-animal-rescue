@@ -367,7 +367,10 @@ pub fn body_extent(
 ) -> Option<[f32; 4]> {
     // (centre, radius) in the body's own frame: facing +z, feet at 0
     let parts: Vec<(Vec3, f32)> = if kind == Kind::Person {
-        vec![(Vec3::new(0.0, 0.9, 0.0), 0.3), (Vec3::new(0.0, 1.55, 0.0), 0.3)]
+        vec![
+            (Vec3::new(0.0, 0.9, 0.0), 0.3),
+            (Vec3::new(0.0, 1.55, 0.0), 0.3),
+        ]
     } else {
         let q = quadruped(kind);
         let torso_y = q.leg + q.radius * 0.8;
@@ -395,7 +398,12 @@ pub fn body_extent(
             height as f32 / 2.0 - v.y * f / depth,
         );
         let r = r * p.transform.scale.x * f / depth;
-        b = [b[0].min(x - r), b[1].min(y - r), b[2].max(x + r), b[3].max(y + r)];
+        b = [
+            b[0].min(x - r),
+            b[1].min(y - r),
+            b[2].max(x + r),
+            b[3].max(y + r),
+        ];
     }
     Some(b)
 }
@@ -1742,7 +1750,12 @@ pub fn spawn_scene(
             })
         };
         let pic = leaves(mats, Color::WHITE, &picture, AlphaMode::Blend);
-        let id = leaves(mats, Color::srgb(0.0, 1.0, 0.0), &mask, AlphaMode::Mask(0.5));
+        let id = leaves(
+            mats,
+            Color::srgb(0.0, 1.0, 0.0),
+            &mask,
+            AlphaMode::Mask(0.5),
+        );
         commands.spawn((
             Mesh3d(mesh.clone()),
             MeshMaterial3d(pic.clone()),
@@ -3086,7 +3099,10 @@ mod tests {
         let d = 50.0 - (0.8 + 0.2 * 0.8);
         // as wide as the torso, centred 5 m right of the middle
         assert!((b[2] - b[0] - 0.4 * f / d).abs() < 0.01, "{b:?}");
-        assert!(((b[0] + b[2]) / 2.0 - (320.0 + 5.0 * f / d)).abs() < 0.01, "{b:?}");
+        assert!(
+            ((b[0] + b[2]) / 2.0 - (320.0 + 5.0 * f / d)).abs() < 0.01,
+            "{b:?}"
+        );
         // from the rump (0.65 m back, up the frame) to past the head (down it)
         assert!((b[1] - (256.0 - 0.65 * f / d)).abs() < 0.01, "{b:?}");
         assert!(b[3] > 256.0 + 0.8 * f / d, "{b:?}");
