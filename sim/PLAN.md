@@ -1081,6 +1081,8 @@ dog, boar).
         | sim only forest round 14 (BAMBI's gain: headroom above the bodies) | .551 | .218 | .024 | .20 / .30 | .58 / .56 |
         | sim only forest round 15 (base equalized in every shot; dropped) | .542 | .217 | .019 | .20 / .30 | .58 / .53 |
         | sim only forest round 16 (two of eight worlds in DJI super-resolution) | .575 | .231 | .039 | .23 / .32 | .59 / .56 |
+        | sim only forest round 17 (broad swells over the ground; dropped) | .578 | .230 | .036 | .23 / .34 | .63 / .54 |
+        | sim only forest round 18 (swells in the 640 worlds only; dropped) | .564 | .222 | .021 | .20 / .32 | .65 / .52 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1322,6 +1324,34 @@ dog, boar).
     -> .45). False alarms .88 -> 1.09 per frame, the same kinds as before: flight 246's
     unlabelled warm rectangle, and animals in flight 252's herds that have no box of their
     own, now found. Kept.
+  - What the sim still lacked, by the spread of the frame over each band of scales (the
+    sd of the difference of two blurs, over the frame's middle; train flights only):
+    BAMBI's frames vary over a fifth of the frame and more twice as much as the sim's
+    (the frame blurred over 64 px of 1024: sd 20 grey levels against 10; the
+    super-resolution worlds 6 against the rimmed flights' 23). Almost all of it is the
+    scene: the camera's fixed shading, averaged over a flight, has sd 4.
+  - Round 17, on round 16: `ForestLook` gets broad swells, 2-12 deg C (log-uniform) warmer
+    or colder over 10-40 m, drawn from the look's own stream so the rest of each shot is
+    the same. A test render then matches BAMBI train's other flights on grey levels
+    (median / 90th percentile / sd / bodies' top / their rise 74.5 / 122 / 32 / 177 / 96
+    against 79 / 122 / 32 / 187 / 96; band over 64 px 17.8 against 20.3).
+  - Animal AP50 .575 -> .578 and AP50-95 .231 -> .230 (both within the seed noise),
+    medium boxes .32 -> .34, precision at .25 .59 -> .63, recall .56 -> .54. On the 600
+    train frames recall .572 -> .526 and false alarms 1.09 -> .92 per frame: the other
+    flights .621 -> .604, the rimmed ones .41 -> .26, their bright animals on busy ground
+    worst (surround sd over 35: .40 -> .21). In the super-resolution worlds the swells
+    lifted the ground (median 60-65 -> 65-74; rimmed 61) and lowered the bodies' rise
+    over it (136-141 -> 127-129).
+  - Round 18: the swells in the six 640 worlds only, the two super-resolution worlds as
+    in round 16 (no render: both sets are byte for byte what that code draws). Animal
+    AP50 .564, AP50-95 .222 (round 16 .575 / .231), recall at .25 .52 at precision .65.
+    On the train frames recall .506 and the rimmed flights .25, as in round 17, though
+    their worlds are round 16's: the swells in the super-resolution worlds weren't what
+    cost them, and round 16's .41 may partly be a lucky run (these flights swing from
+    round to round). With the swells, the 640 worlds match BAMBI's other flights at every
+    scale (bands from 0-1 px to over 64: 1.6 / 2.6 / 4.4 / 5.1 / 5.1 / 5.4 / 6.1 / 17.8
+    against 1.4 / 1.9 / 3.1 / 4.2 / 4.7 / 5.4 / 6.2 / 20.3), but the model is no better
+    for it on val and finds fewer train animals. Both dropped; round 16 stays the base.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
