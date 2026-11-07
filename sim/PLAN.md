@@ -1075,6 +1075,7 @@ dog, boar).
         | sim only forest round 8 (camera detail enhancement) | .505 | .195 | .028 | .20 / .28 | .61 / .48 |
         | sim only forest round 9 (animals' shadows) | .540 | .213 | .037 | .20 / .29 | .61 / .52 |
         | sim only forest round 10 (big herds) | .529 | .206 | .048 | .20 / .31 | .63 / .49 |
+        | sim only forest round 11 (BAMBI's herd sizes; dropped) | .506 | .202 | .046 | .20 / .28 | .67 / .44 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1209,6 +1210,26 @@ dog, boar).
     have no other box centre within 1.5 sides of theirs (recall .44, against .50-.54
     with neighbours), and 71% of BAMBI train's frames with animals hold 1-3 of them, the
     sim's 29%.
+  - Round 11, herd sizes like BAMBI train's: one herd in twenty 13-28, else exp(u^2 ln 13)
+    (half alone, three in four 1-3); 3.0 boxes per frame instead of 5.3. Animal AP50 .529
+    -> .506 (twice the seed noise), recall at .25 .49 -> .44. On the 600 train frames the
+    single animals didn't gain (.44 -> .43) and everything else fell (.477 -> .422; the
+    rimmed flights 250 and 252 to .05). Dropped: fewer animals per shot teach less, and
+    the herd sizes stay as in round 10.
+  - Not the margin: by the bright blob inside each box, BAMBI's labellers leave the same
+    margin as the sim at every blob size (about 9-11 px per side of 1024 for 12-30 px
+    blobs), only less evenly (middle half 7-15 px against 8-10). Its boxes under 24 px
+    (8%) are tight boxes from a few flights (140, 142), which no model can tell from the
+    image; the model's boxes look squeezed toward 40 px only when binned by the label's
+    size (regression to the mean: binned by its own size, it tracks the labels).
+  - At the frame's edge: BAMBI boxes an animal cut by the edge whole, on into the black
+    round the picture (some boxes stay on after the animal has left), and its margins run
+    into the black too; the sim clipped both at the picture. 8% of BAMBI train's animal
+    boxes are a quarter or more black (sim 0.9%), and round 10 finds few of the boxes
+    that touch the black at all: recall .34 under 10% black, .36 at 10-25%, .13 at
+    25-50%, 0 past half (437 of 2,108 boxes; .54 for the rest). The sim also kept its
+    herds near the middle: 2-3% of its boxes are centred in each edge tenth of the frame,
+    BAMBI's 8%.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
