@@ -6,7 +6,9 @@
 //! `--modality rgb` renders daylight colour photos (1280x960, farm pool, `rgb.rs`) instead
 //! of thermal frames (the default). `--modality forest` renders thermal frames like BAMBI's
 //! (straight down over painted forest ground, `forest.rs`; deer, boar, people, dogs), saved
-//! as BAMBI stores them: 1024x1024 with black bands above and below.
+//! as BAMBI stores them: 1024x1024 with black bands above and below. `--modality forest-sr`
+//! renders the same scenes at 1280x1024 through DJI's super-resolution look
+//! (`SensorParams::super_res`), saved the same way.
 //! `--faint-share 0.4` makes the bodies faint in that share of shots (v7; default 0).
 //! `--bodies assets/bodies` builds the kinds that have baked models (`scripts/bake_bodies.py`)
 //! from them instead of primitives; for a seed the shots are the same either way.
@@ -104,7 +106,7 @@ fn main() {
     let faint_share: f64 =
         get("--faint-share").map_or(0.0, |v| v.parse().expect("--faint-share is a number"));
     let modality = get("--modality").map_or(Modality::Thermal, |m| {
-        Modality::parse(&m).expect("--modality is thermal, rgb or forest")
+        Modality::parse(&m).expect("--modality is thermal, rgb, forest or forest-sr")
     });
     let writer = PoolWriter::create(&out, "sim").unwrap_or_else(|e| panic!("{e}"));
     let only: Vec<String> = get("--body-kinds")
@@ -130,7 +132,7 @@ fn main() {
             params: String::from(match modality {
                 Modality::Thermal => THERMAL_PARAMS,
                 Modality::Rgb => RGB_PARAMS,
-                Modality::Forest => FOREST_PARAMS,
+                Modality::Forest | Modality::ForestSr => FOREST_PARAMS,
             }),
             blank: 0,
             index: 0,
@@ -249,7 +251,7 @@ fn drive(
             match what {
                 Capture::Picture => {
                     dg.picture = Some(match dg.modality {
-                        Modality::Thermal | Modality::Forest => {
+                        Modality::Thermal | Modality::Forest | Modality::ForestSr => {
                             raw.chunks_exact(3).map(|p| p[0]).collect()
                         }
                         Modality::Rgb => raw.clone(),
@@ -267,7 +269,7 @@ fn drive(
                         let picture = dg.picture.clone().unwrap();
                         let path = dir.join(format!("{}_raw.png", dg.index));
                         match dg.modality {
-                            Modality::Thermal | Modality::Forest => {
+                            Modality::Thermal | Modality::Forest | Modality::ForestSr => {
                                 image::GrayImage::from_raw(width, height, picture)
                                     .unwrap()
                                     .save(path)
@@ -280,9 +282,10 @@ fn drive(
                     }
                     let mask = id_mask_from_rgb(raw, dg.modality.id_step());
                     let shot = dg.shot.as_ref().expect("a shot was placed");
-                    let forest = matches!(dg.modality, Modality::Forest);
+                    let forest = dg.modality.is_forest();
+                    let min_pixels = MIN_PIXELS * (dg.modality.scale() as usize).pow(2);
                     let boxes: Vec<PixelBox> =
-                        boxes_from_id_mask(&mask, width as usize, MIN_PIXELS)
+                        boxes_from_id_mask(&mask, width as usize, min_pixels)
                             .into_iter()
                             .filter_map(|(id, b, _)| {
                                 let mut b = b.map(|v| v as f32);
@@ -355,7 +358,7 @@ fn padded(boxes: &[PixelBox], pad: f32, width: u32, height: u32) -> Vec<PixelBox
 fn write_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox], bodies: &str) {
     match dg.modality {
         Modality::Rgb => return write_rgb_shot(dg, world, boxes, bodies),
-        Modality::Forest => return write_forest_shot(dg, world, boxes),
+        Modality::Forest | Modality::ForestSr => return write_forest_shot(dg, world, boxes),
         Modality::Thermal => {}
     }
     let shot = dg.shot.take().expect("a shot was placed");
@@ -427,10 +430,22 @@ fn write_forest_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
     let shot = dg.shot.take().expect("a shot was placed");
     let raw = dg.picture.take().expect("thermal frame captured");
     let look = shot.forest.as_ref().expect("a forest shot");
-    let p = SensorParams::forest(&mut dg.rng);
-    let (w, h) = (IMAGE_W as usize, IMAGE_H as usize);
-    let out = sensor::bambi_frame(&sensor::apply(&raw, w, h, &p, &mut dg.rng), w, h);
-    let pad = p.blur_sigma.round() + FOREST_LABEL_MARGIN;
+    let mut p = SensorParams::forest(&mut dg.rng);
+    let (w, h) = dg.modality.size();
+    let (w, h) = (w as usize, h as usize);
+    let scale = dg.modality.scale() as f32;
+    // a super-resolution shot draws its camera, and the noise of its 4 times the pixels,
+    // from a stream of its own, so a seed's scenes are the same at either size
+    let mut own = Rng::new(world.seed ^ (dg.index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+    let rng = if scale > 1.0 {
+        p = p.super_res(&mut own);
+        &mut own
+    } else {
+        &mut dg.rng
+    };
+    let out = sensor::bambi_frame(&sensor::apply(&raw, w, h, &p, rng), w, h);
+    // the labeller's margin is in BAMBI's pixels, whatever the render's size
+    let pad = p.blur_sigma.round() + FOREST_LABEL_MARGIN * scale;
     let n = sensor::BAMBI_SIZE as u32;
     // the margin runs on into the black round the picture, as BAMBI's does
     let boxes: Vec<PixelBox> = boxes

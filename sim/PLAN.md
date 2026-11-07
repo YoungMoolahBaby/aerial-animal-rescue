@@ -1080,6 +1080,7 @@ dog, boar).
         | sim only forest round 13 (sunlit relief on the ground; dropped) | .515 | .205 | .007 | .17 / .28 | .66 / .44 |
         | sim only forest round 14 (BAMBI's gain: headroom above the bodies) | .551 | .218 | .024 | .20 / .30 | .58 / .56 |
         | sim only forest round 15 (base equalized in every shot; dropped) | .542 | .217 | .019 | .20 / .30 | .58 / .53 |
+        | sim only forest round 16 (two of eight worlds in DJI super-resolution) | .575 | .231 | .039 | .23 / .32 | .59 / .56 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1293,6 +1294,34 @@ dog, boar).
     .56 -> .53 at the same precision, and on the 600 train frames recall .538 -> .476
     (flight 250 .19 -> .02, 143 .52 -> .20). Dropped: equalizing flattens the bodies
     against the ground, and the plain stretch kept them standing out.
+  - What the rimmed flights are (250, 252, 143, 251, 346, 249; all from November 2023 on,
+    a quarter of the train misses, and most of the misses at the frame's edge): crisp at
+    the single pixel, 7 times the other flights' energy at that scale (sd of the 0-1 px
+    band 10.7 grey levels of 1024 against 1.4; the sim 1.6-2.3), with white bodies
+    outlined dark on a dark, busy ground (median 61, bodies' brightest 5% at 219). That
+    looks like DJI's infrared super-resolution mode (1280x1024 from the 640x512 core):
+    sharpening the sim's 1024 frame can't make it, there being nothing finer than its
+    640 render to sharpen.
+  - Round 16, on round 14: `--modality forest-sr` renders the same scenes at 1280x1024
+    (the painted ground is already about a texel per pixel at that size) through
+    `SensorParams::super_res`: detail boosted 4-12 times over 1.5-4 px in every shot,
+    little equalizing, the gain's top at the 99.4-99.9th percentile so the sharpening's
+    overshoot clips, and a tone curve (`gamma` 1.2-1.6) darkening the middle. Its own
+    rng stream, so a seed's scenes are the same at either size; the 640 path is byte for
+    byte as before, so worlds 10-15 are round 14's renders and 16-17 are rendered this
+    way (a quarter of the frames; the rimmed flights hold 12% of BAMBI train's frames and
+    22% of its animal boxes). Tuned on the rimmed train flights only: a 200-frame test
+    gives median 64, bodies' top 205, rise over their surroundings 136 (rimmed 128),
+    0-1 / 1-2 / 4-8 px bands 8.8 / 9.0 / 5.7 (10.7 / 8.4 / 7.3); the ground's spread
+    stays narrower (sd 34 against 47), which is the scene (sunlit grass), not the camera.
+  - Animal AP50 .551 -> .575 (2.4x the seed noise; the best yet), AP50-95 .218 -> .231,
+    small boxes .20 -> .23, medium .30 -> .32, recall at .25 the same (.56) at precision
+    .58 -> .59. On the 600 train frames recall .538 -> .572: the rimmed flights .25 ->
+    .41 (252 .07 -> .41, 250 .19 -> .34, 251 .30 -> .52), the others held (.624 -> .621)
+    with a quarter fewer 640 frames; edge boxes up with them (under 10% in the black .13
+    -> .45). False alarms .88 -> 1.09 per frame, the same kinds as before: flight 246's
+    unlabelled warm rectangle, and animals in flight 252's herds that have no box of their
+    own, now found. Kept.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

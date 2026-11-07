@@ -64,6 +64,10 @@ pub struct SensorParams {
     pub agc_hi_pct: f32,
     pub out_lo: f32,
     pub out_hi: f32,
+    /// Tone curve after the auto-gain: the share of the output range a pixel reaches is
+    /// raised to this power (1 = linear, as the gain leaves it; otherwise it also tops out
+    /// at `out_hi`: above 1 darkens the middle and keeps the top).
+    pub gamma: f32,
     pub jpeg_quality: u8,
 }
 
@@ -104,6 +108,7 @@ impl SensorParams {
             detail: 1.0,
             detail_px: 0.0,
             equalize: 0.0,
+            gamma: 1.0,
         }
     }
 }
@@ -145,8 +150,33 @@ impl SensorParams {
             detail: 1.0,
             detail_px: log_range(rng, 1.5, 6.0),
             equalize: 0.0,
+            gamma: 1.0,
         }
         .enhanced(rng)
+    }
+
+    /// DJI's infrared super-resolution, for a 1280x1024 render (`Modality::ForestSr`):
+    /// BAMBI's flights from November 2023 on are crisp at the single pixel (on BAMBI
+    /// train, 7 times the other flights' energy at that scale: sd 10.7 grey levels of 1024
+    /// against 1.4), white bodies outlined dark on a dark ground (median 61, the bodies'
+    /// brightest 5% at 219). Detail is boosted 4-12 times in every shot, over 1.5-4 px,
+    /// with little equalizing (which greys the bodies inside white rims); the gain clips
+    /// the sharpening's overshoot (top at the 99.4-99.9th percentile) and a tone curve
+    /// darkens the middle. A 200-frame test: median 64, bodies' top 205, rise over their
+    /// surroundings 136 (BAMBI's rimmed 128), 0-1 / 1-2 / 4-8 px bands 8.8 / 9.0 / 5.7
+    /// (10.7 / 8.4 / 7.3). The ground's spread stays narrower (sd 34 against 47): that is
+    /// the scene, sunlit grass, not the camera. The blur stays a pixel or so of the larger
+    /// frame; smear and blotches double.
+    pub fn super_res(mut self, rng: &mut Rng) -> Self {
+        self.detail = log_range(rng, 4.0, 12.0);
+        self.detail_px = log_range(rng, 1.5, 4.0);
+        self.equalize = rng.range(0.0, 0.3) as f32;
+        self.agc_hi_pct = rng.range(99.4, 99.9) as f32;
+        self.out_hi = (self.out_lo + rng.range(170.0, 240.0) as f32).min(255.0);
+        self.gamma = rng.range(1.2, 1.6) as f32;
+        self.motion_px *= 2.0;
+        self.blotch_px *= 2.0;
+        self
     }
 
     /// Detail enhancement in half the shots (`detail`).
@@ -278,7 +308,12 @@ pub fn apply(raw: &[u8], width: usize, height: usize, p: &SensorParams, rng: &mu
         .iter()
         .zip(&blotches)
         .map(|(&v, &b)| {
-            let out = p.out_lo + (v - lo) * gain + p.out_noise * rng.normal() as f32 + p.blotch * b;
+            let mut t = (v - lo) * gain;
+            if p.gamma != 1.0 {
+                let span = p.out_hi - p.out_lo;
+                t = span * (t / span).clamp(0.0, 1.0).powf(p.gamma);
+            }
+            let out = p.out_lo + t + p.out_noise * rng.normal() as f32 + p.blotch * b;
             out.round().clamp(0.0, 255.0) as u8
         })
         .collect();
@@ -501,6 +536,7 @@ mod tests {
             detail: 1.0,
             detail_px: 0.0,
             equalize: 0.0,
+            gamma: 1.0,
             fpn_col: 0.0,
             fpn_row: 0.0,
             agc_lo_pct: 0.0,
@@ -546,6 +582,7 @@ mod tests {
                 detail: 1.0,
                 detail_px: 0.0,
                 equalize: 0.0,
+                gamma: 1.0,
                 fpn_col: 0.0,
                 fpn_row: 0.0,
                 agc_lo_pct: 0.0,

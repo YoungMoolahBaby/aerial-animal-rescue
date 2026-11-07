@@ -73,6 +73,10 @@ pub enum Modality {
     /// Thermal nadir video over forests and meadows, like BAMBI (`forest.rs`): written
     /// as thermal frames.
     Forest,
+    /// The same scenes rendered at twice the size (1280x1024), for the crisp, heavily
+    /// enhanced frames of BAMBI's flights from November 2023 on, which look like DJI's
+    /// infrared super-resolution mode (`SensorParams::super_res`).
+    ForestSr,
 }
 
 impl Modality {
@@ -81,6 +85,7 @@ impl Modality {
             "thermal" => Some(Self::Thermal),
             "rgb" => Some(Self::Rgb),
             "forest" => Some(Self::Forest),
+            "forest-sr" => Some(Self::ForestSr),
             _ => None,
         }
     }
@@ -88,7 +93,7 @@ impl Modality {
     /// The metadata's `modality` value.
     pub fn name(self) -> &'static str {
         match self {
-            Self::Thermal | Self::Forest => "thermal",
+            Self::Thermal | Self::Forest | Self::ForestSr => "thermal",
             Self::Rgb => "rgb",
         }
     }
@@ -97,8 +102,19 @@ impl Modality {
     pub fn size(self) -> (u32, u32) {
         match self {
             Self::Thermal | Self::Forest => (IMAGE_W, IMAGE_H),
+            Self::ForestSr => (2 * IMAGE_W, 2 * IMAGE_H),
             Self::Rgb => (RGB_W, RGB_H),
         }
+    }
+
+    /// Forest ground and bodies (`forest.rs`), at either size.
+    pub fn is_forest(self) -> bool {
+        matches!(self, Self::Forest | Self::ForestSr)
+    }
+
+    /// Render pixels per pixel of the 640x512 sensor.
+    pub fn scale(self) -> u32 {
+        if self == Self::ForestSr { 2 } else { 1 }
     }
 
     /// The body pool, in id order.
@@ -106,7 +122,7 @@ impl Modality {
         let pool: &[(Kind, usize)] = match self {
             Self::Thermal => &POOL,
             Self::Rgb => &RGB_POOL,
-            Self::Forest => &FOREST_POOL,
+            Self::Forest | Self::ForestSr => &FOREST_POOL,
         };
         pool.iter()
             .flat_map(|&(k, n)| std::iter::repeat_n(k, n))
@@ -118,7 +134,7 @@ impl Modality {
     /// `ID_STEP`, so their pools render as before).
     pub fn id_step(self) -> u8 {
         match self {
-            Self::Forest => 4,
+            Self::Forest | Self::ForestSr => 4,
             Self::Thermal | Self::Rgb => ID_STEP,
         }
     }
@@ -128,7 +144,7 @@ impl Modality {
             Self::Thermal => &CLUTTER,
             Self::Rgb => &RGB_CLUTTER,
             // trees, logs and rocks are painted into the ground (`forest.rs`)
-            Self::Forest => &[],
+            Self::Forest | Self::ForestSr => &[],
         }
     }
 
@@ -613,7 +629,7 @@ impl Shot {
         faint_share: f64,
         modality: Modality,
     ) -> Self {
-        if modality == Modality::Forest {
+        if modality.is_forest() {
             return Self::forest(rng, world, kinds, posed);
         }
         let terrain = &world.terrain;
@@ -1602,7 +1618,7 @@ pub fn spawn_scene(
         "too many targets for the id render"
     );
     let rgb = modality == Modality::Rgb;
-    let forest = modality == Modality::Forest;
+    let forest = modality.is_forest();
     let camera = commands
         .spawn((
             Camera3d::default(),
@@ -3122,7 +3138,12 @@ mod tests {
     #[test]
     fn pool_fits_the_id_render() {
         assert_eq!(pool(), Modality::Thermal.kinds());
-        for m in [Modality::Thermal, Modality::Rgb, Modality::Forest] {
+        for m in [
+            Modality::Thermal,
+            Modality::Rgb,
+            Modality::Forest,
+            Modality::ForestSr,
+        ] {
             assert!(m.kinds().len() * (m.id_step() as usize) <= 255);
             // the canopy's white decodes past the last target
             let white = (255.0 / m.id_step() as f32).round() as usize;
