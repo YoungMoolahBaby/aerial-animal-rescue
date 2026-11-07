@@ -1077,6 +1077,7 @@ dog, boar).
         | sim only forest round 10 (big herds) | .529 | .206 | .048 | .20 / .31 | .63 / .49 |
         | sim only forest round 11 (BAMBI's herd sizes; dropped) | .506 | .202 | .046 | .20 / .28 | .67 / .44 |
         | sim only forest round 12 (herds anywhere, edge animals boxed whole) | .540 | .221 | .022 | .19 / .30 | .64 / .48 |
+        | sim only forest round 13 (sunlit relief on the ground; dropped) | .515 | .205 | .007 | .17 / .28 | .66 / .44 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1245,6 +1246,14 @@ dog, boar).
     those boxes in the rimmed flights 250, 252 and 143, which swing from round to round
     (252: .38, .23, .05, .17 in rounds 9-12). Kept: val gains on both measures, and the
     herds and labels are BAMBI's.
+  - Round 13, on round 12, sunlit relief: BAMBI's sunny meadows in the rimmed flights
+    look embossed (each tussock and hummock bright on its sunward side, dark on the
+    other, nearly as white as the animals), the sim's evenly warm. In sunny shots the
+    ground's slopes facing the sun were warmed and those facing away cooled (0.5-6 C
+    times the sun's height, on the tussocks and on new 0.3-1 m hummocks; not on snow).
+    Animal AP50 .540 -> .515, AP50-95 .221 -> .205, recall at .25 .48 -> .44; on the
+    train frames recall .46 -> .42, and the rimmed flights it was aimed at fell too (250
+    .11 -> .05, 252 .17 -> .08, 143 .39 -> .32). Dropped.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
