@@ -182,10 +182,12 @@ struct Blob {
 #[derive(Clone, Copy, Debug)]
 struct Slab {
     centre: [f64; 2],
-    /// Half lengths along and across `angle`, metres (a disc: radius `half[0]`).
+    /// Half lengths along and across `angle`, metres.
     half: [f64; 2],
     angle: f64,
-    round: bool,
+    /// Radius of its corners, metres: 0 for a box, `half[1]` for a capsule (a body's
+    /// shadow), both halves for a disc.
+    corner_m: f64,
     offset_c: f64,
     /// A roof's two slopes: the half on the positive side across `angle` is this much
     /// warmer than the other.
@@ -196,6 +198,18 @@ struct Slab {
     soft_m: f64,
     /// Share of the ground's texture kept through it.
     keep: f64,
+}
+
+/// A body that throws a shadow (`ForestLook::body_shadows`): where it stands, the heading
+/// of its long axis (radians, from +x toward +z), its length and radius and the height of
+/// its middle above the ground, metres.
+#[derive(Clone, Copy, Debug)]
+pub struct BodyShadow {
+    pub at: [f64; 2],
+    pub heading: f64,
+    pub length: f64,
+    pub radius: f64,
+    pub height: f64,
 }
 
 /// The layout of one forest shot, in metres; `paint` turns it into temperatures.
@@ -219,6 +233,8 @@ pub struct ForestLook {
     pub n_trees: usize,
     pub n_debris: usize,
     pub n_man_made: usize,
+    /// How much colder than the sunlit ground a crown's shadow is, °C.
+    pub shadow_c: f64,
     /// The painted field, `FOREST_TEX` squared, row by row (z rows, x columns).
     pub field: Arc<Vec<f32>>,
     pub canopy: Option<Canopy>,
@@ -508,11 +524,44 @@ impl ForestLook {
             n_trees,
             n_debris,
             n_man_made,
+            shadow_c,
             field: Arc::new(Vec::new()),
             canopy,
         };
         look.field = Arc::new(paint(&look, table, FOREST_TEX));
         look
+    }
+
+    /// Paint the shadows of bodies standing in the sun (`sun`: towards it, y up) into the
+    /// ground, once they are placed: each a band the body's length and width, lifted off
+    /// its feet by the height of its middle and stretched by its depth, away from the sun.
+    /// BAMBI's sunlit deer throw dark shadows beside them; the sim's had none.
+    pub fn body_shadows(&mut self, sun: [f64; 3], bodies: &[BodyShadow]) {
+        let elev = sun[1].asin().max(0.2);
+        let len = sun[0].hypot(sun[2]).max(1e-6);
+        let away = [-sun[0] / len, -sun[2] / len];
+        // metres of shadow per metre of height (capped, as the crowns' shadows are)
+        let reach = (1.0 / elev.tan()).min(4.0);
+        let field = Arc::make_mut(&mut self.field);
+        for b in bodies {
+            let lift = (b.height - b.radius).max(0.0) * reach;
+            let depth = 2.0 * b.radius * reach;
+            let s = Slab {
+                centre: [b.at[0] + away[0] * lift, b.at[1] + away[1] * lift],
+                half: [b.length / 2.0, b.radius],
+                angle: b.heading,
+                corner_m: b.radius,
+                // a fresh shadow: not as cold as a crown's, which has stood all day
+                offset_c: -0.8 * self.shadow_c,
+                ridge_c: 0.0,
+                sweep: [away[0] * depth, away[1] * depth],
+                soft_m: 0.08,
+                // colder than the ground it falls on, whatever its cover (a mark kept at
+                // 0.4, as the crowns' shadows are, would warm snow colder than the base)
+                keep: 1.0,
+            };
+            paint_slab(field, (self.centre, self.size), self.base_c, &s);
+        }
     }
 
     /// Ground temperature at (x, z), from the painted field (nearest texel).
@@ -722,7 +771,7 @@ fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(S
         centre,
         half,
         angle,
-        round: false,
+        corner_m: 0.0,
         offset_c,
         ridge_c: 0.0,
         sweep: [0.0, 0.0],
@@ -778,7 +827,9 @@ fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(S
             ];
             let angle = dir + if across { PI / 2.0 } else { 0.0 } + rng.range(-0.15, 0.15);
             let mut s = slab(at, half, angle, row_c * rng.range(0.8, 1.2));
-            s.round = round;
+            if round {
+                s.corner_m = half[0];
+            }
             out.push((s, height, false));
         }
     } else if u < 0.65 {
@@ -796,7 +847,9 @@ fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(S
                 [rng.range(0.3, 1.2), rng.range(0.2, 0.6)]
             };
             let mut s = slab(at, half, rng.range(0.0, TAU), temp(rng, 14.0));
-            s.round = round;
+            if round {
+                s.corner_m = half[0];
+            }
             out.push((s, rng.range(0.3, 1.2), false));
         }
     } else if u < 0.8 {
@@ -888,11 +941,24 @@ pub fn paint(look: &ForestLook, table: &NoiseTable, n: usize) -> Vec<f32> {
         });
     }
     for s in &look.slabs {
-        slab(n, ts, at, s, |k, cov, side| {
-            mark(&mut field, k, cov, base + s.offset_c + side * s.ridge_c / 2.0, s.keep)
-        });
+        paint_slab(&mut field, (look.centre, look.size), base, s);
     }
     field
+}
+
+/// Blend a slab into a field over the square (`centre`, `size`), as `paint` does: toward
+/// its temperature, keeping `keep` of the ground's texture.
+fn paint_slab(field: &mut [f32], square: ([f64; 2], f64), base: f64, s: &Slab) {
+    let (centre, size) = square;
+    let n = (field.len() as f64).sqrt().round() as usize;
+    let ts = size / n as f64;
+    let (x0, z0) = (centre[0] - size / 2.0, centre[1] - size / 2.0);
+    let at = |p: [f64; 2]| ((p[0] - x0) / ts, (p[1] - z0) / ts);
+    slab(n, ts, at, s, |k, cov, side| {
+        let v = field[k] as f64;
+        let t = base + s.offset_c + side * s.ridge_c / 2.0 + (v - base) * s.keep;
+        field[k] = (v * (1.0 - cov) + t * cov) as f32;
+    });
 }
 
 /// Conifer crowns and bare branches over the canopy layer (`temps`, `alpha` 0..1), laid
@@ -1131,11 +1197,10 @@ fn slab(
     let edge = ts.max(s.soft_m);
     let dist = |px: f64, py: f64| {
         let (u, v) = (px * c + py * sn, -px * sn + py * c);
-        if s.round {
-            u.hypot(v) - s.half[0]
-        } else {
-            (u.abs() - s.half[0]).max(v.abs() - s.half[1])
-        }
+        // a rounded box's signed distance
+        let r = s.corner_m;
+        let (qx, qy) = (u.abs() - s.half[0] + r, v.abs() - s.half[1] + r);
+        qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - r
     };
     for j in (j0.max(0.0) as usize)..=(j1.min(n as f64 - 1.0) as usize) {
         for i in (i0.max(0.0) as usize)..=(i1.min(n as f64 - 1.0) as usize) {
@@ -1265,7 +1330,7 @@ mod tests {
             centre: [5.0, 5.0],
             half: [1.0, 0.5],
             angle: 0.4,
-            round: false,
+            corner_m: 0.0,
             offset_c: 3.0,
             ridge_c: 2.0,
             sweep: [0.0, 0.0],
@@ -1285,7 +1350,7 @@ mod tests {
         assert!((sides[0] as f64 / sides[1] as f64 - 1.0).abs() < 0.1, "{sides:?}");
         // a disc swept 4 m covers a capsule
         let shadow = Slab {
-            round: true,
+            corner_m: 1.0,
             half: [1.0, 1.0],
             sweep: [4.0, 0.0],
             soft_m: 0.15,
@@ -1339,6 +1404,29 @@ mod tests {
         let got = look.ground_at(s.centre[0], s.centre[1]);
         let want = look.base_c + s.offset_c;
         assert!((got - want).abs() <= s.ridge_c.abs() / 2.0 + 1.0, "{got} vs {want}");
+    }
+
+    #[test]
+    fn bodies_throw_shadows_away_from_the_sun() {
+        let table = NoiseTable::new(7);
+        let mut look = ForestLook::random(&mut Rng::new(4), [0.0, 0.0], 30.0, None, &table);
+        let before = look.clone();
+        // the sun low in the +x sky (30 degrees up): a standing deer's shadow lies on -x
+        let sun = [30f64.to_radians().cos(), 30f64.to_radians().sin(), 0.0];
+        let deer = BodyShadow {
+            at: [0.0, 0.0],
+            heading: 0.0,
+            length: 1.3,
+            radius: 0.2,
+            height: 0.96,
+        };
+        look.body_shadows(sun, &[deer]);
+        let cooled = |x: f64, z: f64| before.ground_at(x, z) - look.ground_at(x, z);
+        assert!((cooled(-1.6, 0.0) - 0.8 * look.shadow_c).abs() < 1e-3, "{}", cooled(-1.6, 0.0));
+        // nothing on the sun's side, under the feet or off to the side
+        for (x, z) in [(1.6, 0.0), (0.0, 0.0), (-1.6, 1.0)] {
+            assert_eq!(cooled(x, z), 0.0, "at {x}, {z}");
+        }
     }
 
     #[test]

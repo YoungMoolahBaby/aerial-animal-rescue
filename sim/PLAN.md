@@ -1073,6 +1073,7 @@ dog, boar).
         | sim only forest round 6 (BAMBI-sized animals) | .481 | .193 | .063 | .19 / .28 | .55 / .48 |
         | sim only forest round 7 (man-made things) | .508 | .209 | .010 | .16 / .29 | .60 / .48 |
         | sim only forest round 8 (camera detail enhancement) | .505 | .195 | .028 | .20 / .28 | .61 / .48 |
+        | sim only forest round 9 (animals' shadows) | .540 | .213 | .037 | .20 / .29 | .61 / .52 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1180,6 +1181,19 @@ dog, boar).
     texture, so on a cover colder than the base (snow, 2-6 °C below) a shadow comes out
     warmer than the snow around it. Left as is for now (changing it would confound the
     rounds); the body shadows keep the whole local texture and so always cool.
+  - Round 9, animals' shadows: by day (sun in 49% of shots) every deer and boar throws a
+    shadow on the ground, painted after the bodies are placed (`ForestLook::
+    body_shadows`): a capsule the body's length and width, lifted off its feet by the
+    height of its middle and stretched by its depth, away from the sun (at most 4 m per
+    metre of height, as the crowns' shadows), 0.8x as cold as a crown's shadow, keeping
+    the ground's texture. BAMBI's sunlit deer (flight 249) all have dark shadows beside
+    them; the sim's had none. People throw none (rare in BAMBI; a thin line).
+  - Animal AP50 .505 -> .540 (3.5x the seed noise), AP50-95 .213, recall at .25 .48 ->
+    .52 and at .5 .38 -> .43 at the same precision.
+  - Next: big herds. BAMBI train has 71% of its animal frames with 1-3 animals, 24% with
+    4-12 and 5% with 13 or more, but by boxes 30% / 45% / 25%: a quarter of the animals
+    stand in herds of 13 or more (up to 59, flight 17). The sim's pool held 12 deer and
+    12 boar, its herds uniform 1-12 (frames 23% / 77% / 0%, boxes 6% / 94% / 0%).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

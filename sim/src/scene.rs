@@ -34,7 +34,7 @@ use bevy::render::view::Msaa;
 
 use crate::bodies::{self, Model};
 use crate::fields::{Layout, NoiseTable, OVERLAY_TEX};
-use crate::forest::{CANOPY_TEX, FOREST_TEX, ForestLook};
+use crate::forest::{BodyShadow, CANOPY_TEX, FOREST_TEX, ForestLook};
 use crate::rgb::{self, Coat, Daylight, Ground};
 use crate::rng::Rng;
 use crate::thermal::{Conditions, TempWindow, ground_texture, texture_gain};
@@ -944,7 +944,7 @@ impl Shot {
         );
         // herds stand close: a few metres for boar, wider for deer
         let herd_r = rng.range(1.5, 12.0_f64.min(spread));
-        let targets = kinds
+        let targets: Vec<Option<Placement>> = kinds
             .iter()
             .zip(&chosen)
             .enumerate()
@@ -978,6 +978,33 @@ impl Shot {
                 })
             })
             .collect();
+
+        // by day the animals throw shadows on the ground beside them (people, rare in
+        // BAMBI, don't: a standing capsule's shadow is a thin line)
+        if let Some(sun) = sun {
+            let bodies: Vec<BodyShadow> = kinds
+                .iter()
+                .zip(&targets)
+                .filter(|(kind, _)| **kind != Kind::Person)
+                .filter_map(|(&kind, t)| {
+                    let tr = t.as_ref()?.transform;
+                    let q = quadruped(kind);
+                    let scale = tr.scale.x as f64;
+                    let (x, z) = (tr.translation.x as f64, tr.translation.z as f64);
+                    let long = tr.rotation * Vec3::Z;
+                    Some(BodyShadow {
+                        at: [x, z],
+                        heading: (long.z as f64).atan2(long.x as f64),
+                        length: q.length as f64 * scale,
+                        radius: q.radius as f64 * scale,
+                        // lying bodies sit lower than their feet would put them
+                        height: tr.translation.y as f64 - terrain.height(x, z)
+                            + (q.leg + q.radius * 0.8) as f64 * scale,
+                    })
+                })
+                .collect();
+            look.body_shadows(sun, &bodies);
+        }
 
         // bodies warmer than the window's top come out white, as BAMBI's mostly do
         let leaves = (look.canopy_percentile(0.1), look.canopy_percentile(99.9));
