@@ -1079,6 +1079,7 @@ dog, boar).
         | sim only forest round 12 (herds anywhere, edge animals boxed whole) | .540 | .221 | .022 | .19 / .30 | .64 / .48 |
         | sim only forest round 13 (sunlit relief on the ground; dropped) | .515 | .205 | .007 | .17 / .28 | .66 / .44 |
         | sim only forest round 14 (BAMBI's gain: headroom above the bodies) | .551 | .218 | .024 | .20 / .30 | .58 / .56 |
+        | sim only forest round 15 (base equalized in every shot; dropped) | .542 | .217 | .019 | .20 / .30 | .58 / .53 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1283,6 +1284,15 @@ dog, boar).
     .07), but false alarms .49 -> .88 per frame: flight 246's hot rectangle as before,
     and more on small warm specks and branches (flights 20, 17, 140, 141). Kept: val
     holds or gains, and the sim's grey levels are now BAMBI's.
+  - Round 15, on round 14: the shots without detail enhancement (half) had their base
+    equalized too, gently (0.1-0.6, from a stream of its own, so the same scenes). DJI's
+    auto-gain is histogram based either way, and the plain half came out darker and
+    flatter than BAMBI train (median grey 58 against 76, 90th percentile 97 against 125);
+    a 200-frame test with it matched (76, 124, sd 34 against 35).
+  - Animal AP50 .551 -> .542, AP50-95 .218 -> .217 (within the noise), but recall at .25
+    .56 -> .53 at the same precision, and on the 600 train frames recall .538 -> .476
+    (flight 250 .19 -> .02, 143 .52 -> .20). Dropped: equalizing flattens the bodies
+    against the ground, and the plain stretch kept them standing out.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
