@@ -201,7 +201,11 @@ pub fn bambi_box(b: [f32; 4], width: usize, height: usize) -> [f32; 4] {
     let (x1, x2) = (b[0] as f64 * sx, b[2] as f64 * sx);
     let (mut y1, mut y2) = (f64::MAX, f64::MIN);
     // the rows stretch most at the sides, so check both ends and the middle if inside
-    let mut us = vec![x1 / n * 2.0 - 1.0, x2 / n * 2.0 - 1.0];
+    // (a box past the frame's sides takes the side's rows)
+    let mut us = vec![
+        (x1 / n * 2.0 - 1.0).clamp(-1.0, 1.0),
+        (x2 / n * 2.0 - 1.0).clamp(-1.0, 1.0),
+    ];
     if x1 < n / 2.0 && x2 > n / 2.0 {
         us.push(0.0);
     }

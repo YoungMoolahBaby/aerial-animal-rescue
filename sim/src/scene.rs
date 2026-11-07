@@ -352,6 +352,54 @@ fn quadruped(kind: Kind) -> Quadruped {
     }
 }
 
+/// Where a body of `kind` placed at `p` falls in a `width` x `height` render seen from
+/// `camera` (vertical field of view `vfov_deg`): the box round its parts taken as spheres
+/// (a quadruped's torso ends and raised head, a person's hips and head), in pixels (x
+/// right, y down), not clipped to the frame; `None` if any of it is behind the camera.
+/// BAMBI boxes an animal cut by the frame's edge whole, on into the black.
+pub fn body_extent(
+    kind: Kind,
+    p: &Placement,
+    camera: &Transform,
+    vfov_deg: f64,
+    width: u32,
+    height: u32,
+) -> Option<[f32; 4]> {
+    // (centre, radius) in the body's own frame: facing +z, feet at 0
+    let parts: Vec<(Vec3, f32)> = if kind == Kind::Person {
+        vec![(Vec3::new(0.0, 0.9, 0.0), 0.3), (Vec3::new(0.0, 1.55, 0.0), 0.3)]
+    } else {
+        let q = quadruped(kind);
+        let torso_y = q.leg + q.radius * 0.8;
+        let end = q.length / 2.0 - q.radius;
+        vec![
+            (Vec3::new(0.0, torso_y, -end), q.radius),
+            (Vec3::new(0.0, torso_y, end), q.radius),
+            (
+                Vec3::new(0.0, torso_y + q.neck_rise, q.length / 2.0 + q.head * 0.5),
+                q.head,
+            ),
+        ]
+    };
+    let f = height as f32 / 2.0 / ((vfov_deg as f32).to_radians() / 2.0).tan();
+    let to_camera = camera.rotation.inverse();
+    let mut b = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    for (c, r) in parts {
+        let v = to_camera * (p.transform.transform_point(c) - camera.translation);
+        let depth = -v.z;
+        if depth <= 0.0 {
+            return None;
+        }
+        let (x, y) = (
+            width as f32 / 2.0 + v.x * f / depth,
+            height as f32 / 2.0 - v.y * f / depth,
+        );
+        let r = r * p.transform.scale.x * f / depth;
+        b = [b[0].min(x - r), b[1].min(y - r), b[2].max(x + r), b[3].max(y + r)];
+    }
+    Some(b)
+}
+
 #[derive(Resource)]
 pub struct World {
     pub terrain: Terrain,
@@ -950,9 +998,19 @@ impl Shot {
 
         let chosen = forest_targets(rng, kinds);
         let spread = cover_m / 2.0;
+        // the herd stands anywhere in the frame, as BAMBI's do (its animals spread evenly
+        // over the frame; the sim's crowded the middle), so some are cut by the edge
+        let on_ground = |v: Vec3| {
+            let l = (v.x as f64).hypot(v.z as f64).max(1e-6);
+            [v.x as f64 / l, v.z as f64 / l]
+        };
+        let right = on_ground(camera.rotation * Vec3::X);
+        let up = on_ground(camera.rotation * Vec3::Y);
+        let u = rng.range(-1.0, 1.0) * spread * IMAGE_W as f64 / IMAGE_H as f64;
+        let v = rng.range(-1.0, 1.0) * spread;
         let (cx, cz) = (
-            aim[0] + rng.range(-0.8, 0.8) * spread,
-            aim[2] + rng.range(-0.8, 0.8) * spread,
+            aim[0] + u * right[0] + v * up[0],
+            aim[2] + u * right[1] + v * up[1],
         );
         // herds stand close: a few metres for boar, wider for deer, and big herds spread
         // out (as the root of their size)
@@ -2556,6 +2614,14 @@ impl SceneCtl<'_, '_> {
         Some(t.bodies[variant_index(p, t.bodies.len())].as_str())
     }
 
+    /// Where target `id`'s whole body falls in a `width` x `height` render of `shot`
+    /// (`body_extent`), unclipped; `None` if it isn't in the shot.
+    pub fn body_box(&self, id: u32, shot: &Shot, width: u32, height: u32) -> Option<[f32; 4]> {
+        let p = shot.targets.get((id as usize).checked_sub(1)?)?.as_ref()?;
+        let (_, _, t) = self.targets.iter().find(|(_, _, t)| t.id == id)?;
+        body_extent(t.kind, p, &shot.camera, shot.vfov_deg, width, height)
+    }
+
     /// Class id of target `id`.
     pub fn class_of(&self, id: u32) -> Option<u32> {
         self.targets
@@ -3005,6 +3071,36 @@ mod tests {
             (0.2..0.6).contains(&share),
             "{faint} faint of {with_targets}"
         );
+    }
+
+    #[test]
+    fn body_extent_projects_a_deer_seen_from_above() {
+        // straight down from 50 m: world +x is right in the frame, +z down
+        let camera = Transform::from_xyz(0.0, 50.0, 0.0).looking_at(Vec3::ZERO, Vec3::NEG_Z);
+        let p = Placement {
+            transform: Transform::from_xyz(5.0, 0.0, 0.0),
+            temp_c: [0.0; 3],
+        };
+        let b = body_extent(Kind::Deer, &p, &camera, 45.0, 640, 512).unwrap();
+        let f = 256.0 / 22.5f32.to_radians().tan();
+        let d = 50.0 - (0.8 + 0.2 * 0.8);
+        // as wide as the torso, centred 5 m right of the middle
+        assert!((b[2] - b[0] - 0.4 * f / d).abs() < 0.01, "{b:?}");
+        assert!(((b[0] + b[2]) / 2.0 - (320.0 + 5.0 * f / d)).abs() < 0.01, "{b:?}");
+        // from the rump (0.65 m back, up the frame) to past the head (down it)
+        assert!((b[1] - (256.0 - 0.65 * f / d)).abs() < 0.01, "{b:?}");
+        assert!(b[3] > 256.0 + 0.8 * f / d, "{b:?}");
+        // turned to face +x, it lies across the frame instead, and doubled in size it
+        // covers twice as much
+        let p = Placement {
+            transform: Transform::from_rotation(Quat::from_rotation_y(FRAC_PI_2))
+                .with_scale(Vec3::splat(2.0)),
+            temp_c: [0.0; 3],
+        };
+        let b = body_extent(Kind::Deer, &p, &camera, 45.0, 640, 512).unwrap();
+        let d = 50.0 - 2.0 * (0.8 + 0.2 * 0.8);
+        assert!((b[3] - b[1] - 0.8 * f / d).abs() < 0.01, "{b:?}");
+        assert!(b[2] - b[0] > 2.0 * 1.4 * f / d, "{b:?}");
     }
 
     #[test]

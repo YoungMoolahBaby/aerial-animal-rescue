@@ -1076,6 +1076,7 @@ dog, boar).
         | sim only forest round 9 (animals' shadows) | .540 | .213 | .037 | .20 / .29 | .61 / .52 |
         | sim only forest round 10 (big herds) | .529 | .206 | .048 | .20 / .31 | .63 / .49 |
         | sim only forest round 11 (BAMBI's herd sizes; dropped) | .506 | .202 | .046 | .20 / .28 | .67 / .44 |
+        | sim only forest round 12 (herds anywhere, edge animals boxed whole) | .540 | .221 | .022 | .19 / .30 | .64 / .48 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1230,6 +1231,20 @@ dog, boar).
     25-50%, 0 past half (437 of 2,108 boxes; .54 for the rest). The sim also kept its
     herds near the middle: 2-3% of its boxes are centred in each edge tenth of the frame,
     BAMBI's 8%.
+  - Round 12, on round 10: the herd's centre is drawn anywhere in the frame (along the
+    frame's own axes, not the world's), and an animal cut by the frame's edge is boxed
+    whole: each side of its visible box on the edge moves out to its whole body's
+    (`scene::body_extent`: torso ends and head as spheres, projected through the
+    camera), and margins run on into the black, clipped only at the 1024 canvas. Boxes
+    a quarter or more black 0.6% -> 3.4% (BAMBI 8%, some of which are boxes left on
+    after the animal has gone); boxes per frame 5.5 -> 4.8.
+  - Animal AP50 .529 -> .540, AP50-95 .206 -> .221 (the best yet), precision at .25 .63
+    -> .64, recall .49 -> .48. On the 600 train frames the edge boxes didn't clearly
+    gain: the model's boxes now reach into the black where the label is 10-25% black
+    (median 12% black, round 10 5%), but recall under 10% black fell .34 -> .25, most of
+    those boxes in the rimmed flights 250, 252 and 143, which swing from round to round
+    (252: .38, .23, .05, .17 in rounds 9-12). Kept: val gains on both measures, and the
+    herds and labels are BAMBI's.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

@@ -279,21 +279,27 @@ fn drive(
                         .unwrap();
                     }
                     let mask = id_mask_from_rgb(raw, dg.modality.id_step());
+                    let shot = dg.shot.as_ref().expect("a shot was placed");
+                    let forest = matches!(dg.modality, Modality::Forest);
                     let boxes: Vec<PixelBox> =
                         boxes_from_id_mask(&mask, width as usize, MIN_PIXELS)
                             .into_iter()
                             .filter_map(|(id, b, _)| {
+                                let mut b = b.map(|v| v as f32);
+                                if forest {
+                                    let whole = ctl.body_box(id, shot, width, height);
+                                    b = whole_at_the_edge(b, whole, width, height);
+                                }
                                 Some(PixelBox {
                                     class_id: ctl.class_of(id)?,
-                                    x1: b[0] as f32,
-                                    y1: b[1] as f32,
-                                    x2: b[2] as f32,
-                                    y2: b[3] as f32,
+                                    x1: b[0],
+                                    y1: b[1],
+                                    x2: b[2],
+                                    y2: b[3],
                                 })
                             })
                             .collect();
                     // what each body in the shot is built from (CC0 models: sim/bodies.csv)
-                    let shot = dg.shot.as_ref().expect("a shot was placed");
                     let bodies: Vec<&str> = (1..=shot.targets.len() as u32)
                         .filter_map(|id| ctl.body_of(id, shot))
                         .collect();
@@ -304,6 +310,32 @@ fn drive(
             }
         }
     }
+}
+
+/// BAMBI boxes an animal cut by the frame's edge whole, on into the black: each side of
+/// the visible box `b` that lies on the edge of the `width` x `height` frame moves out to
+/// the whole body's (`whole`, unclipped).
+fn whole_at_the_edge(
+    mut b: [f32; 4],
+    whole: Option<[f32; 4]>,
+    width: u32,
+    height: u32,
+) -> [f32; 4] {
+    if let Some(w) = whole {
+        if b[0] <= 0.0 {
+            b[0] = b[0].min(w[0]);
+        }
+        if b[1] <= 0.0 {
+            b[1] = b[1].min(w[1]);
+        }
+        if b[2] >= width as f32 {
+            b[2] = b[2].max(w[2]);
+        }
+        if b[3] >= height as f32 {
+            b[3] = b[3].max(w[3]);
+        }
+    }
+    b
 }
 
 /// Boxes grown by `pad` pixels on every side, clipped to the frame.
@@ -400,15 +432,17 @@ fn write_forest_shot(dg: &mut Datagen, world: &World, boxes: &[PixelBox]) {
     let out = sensor::bambi_frame(&sensor::apply(&raw, w, h, &p, &mut dg.rng), w, h);
     let pad = p.blur_sigma.round() + FOREST_LABEL_MARGIN;
     let n = sensor::BAMBI_SIZE as u32;
-    let boxes: Vec<PixelBox> = padded(boxes, pad, IMAGE_W, IMAGE_H)
+    // the margin runs on into the black round the picture, as BAMBI's does
+    let boxes: Vec<PixelBox> = boxes
         .iter()
         .map(|b| {
-            let [x1, y1, x2, y2] = sensor::bambi_box([b.x1, b.y1, b.x2, b.y2], w, h);
+            let grown = [b.x1 - pad, b.y1 - pad, b.x2 + pad, b.y2 + pad];
+            let [x1, y1, x2, y2] = sensor::bambi_box(grown, w, h);
             PixelBox {
-                x1,
-                y1,
-                x2,
-                y2,
+                x1: x1.max(0.0),
+                y1: y1.max(0.0),
+                x2: x2.min(n as f32),
+                y2: y2.min(n as f32),
                 ..*b
             }
         })
