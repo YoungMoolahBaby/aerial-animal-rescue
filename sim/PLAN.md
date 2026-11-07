@@ -1083,6 +1083,8 @@ dog, boar).
         | sim only forest round 16 (two of eight worlds in DJI super-resolution) | .575 | .231 | .039 | .23 / .32 | .59 / .56 |
         | sim only forest round 17 (broad swells over the ground; dropped) | .578 | .230 | .036 | .23 / .34 | .63 / .54 |
         | sim only forest round 18 (swells in the 640 worlds only; dropped) | .564 | .222 | .021 | .20 / .32 | .65 / .52 |
+        | sim only forest round 19 (super-resolution gain before the boost; dropped) | .536 | .219 | .025 | .21 / .29 | .67 / .47 |
+        | sim only forest round 16 again, training seed 1 | .552 | .223 | .041 | .24 / .31 | .53 / .57 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1352,6 +1354,25 @@ dog, boar).
     scale (bands from 0-1 px to over 64: 1.6 / 2.6 / 4.4 / 5.1 / 5.1 / 5.4 / 6.1 / 17.8
     against 1.4 / 1.9 / 3.1 / 4.2 / 4.7 / 5.4 / 6.2 / 20.3), but the model is no better
     for it on val and finds fewer train animals. Both dropped; round 16 stays the base.
+  - Round 19, on round 16: in the super-resolution worlds, round 16's gain was set after a
+    strong detail boost, whose overshoot took the range and left everything from 4 px up
+    at half the rimmed flights' spread (bands 4.2-5.6 against 7.3-8.1, frame sd 34
+    against 47). The gain now comes from the image before the boost (`agc_base`), the
+    boost milder and finer (2.5-7 times over 1-2.5 px). A 200-frame test matched the
+    rimmed train flights at every band from 0-1 px to 32-64 px (9.4 / 9.5 / 9.8 / 8.3 /
+    8.0 / 8.9 / 8.9 against 10.8 / 8.5 / 7.9 / 7.3 / 7.5 / 8.0 / 8.1; sd 49 against 47),
+    and side by side the frames look more like theirs (bright ground, deep darks).
+  - Animal AP50 .536, AP50-95 .219 (round 16 .575 / .231), recall at .25 .47 at precision
+    .67. On the train frames recall .477: rimmed .20 (252 .07), and the other flights .56,
+    though their 640 worlds are byte for byte round 16's. Dropped.
+  - Round 16's images again with training seed 1: animal AP50 .552, AP50-95 .223 (seed 0
+    .575 / .231); train recall .553 (.572), rimmed .36 (.41), others .61 (.62). Between
+    seeds val moves more than the .01 measured at round 3: round 16 is .564 / .227 over
+    the two, still above round 14 (.551 / .218, one seed), and the rimmed flights' gain
+    (.25 -> .36-.41) holds on both. Rounds 17-19 are under both seeds on the train
+    frames (.526 / .506 / .477, rimmed .26 / .25 / .20), so they stay dropped; round 17's
+    val .578 is within the spread. From here a round needs two seeds to call a change
+    under about .02.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
