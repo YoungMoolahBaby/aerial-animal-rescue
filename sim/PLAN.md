@@ -1078,6 +1078,7 @@ dog, boar).
         | sim only forest round 11 (BAMBI's herd sizes; dropped) | .506 | .202 | .046 | .20 / .28 | .67 / .44 |
         | sim only forest round 12 (herds anywhere, edge animals boxed whole) | .540 | .221 | .022 | .19 / .30 | .64 / .48 |
         | sim only forest round 13 (sunlit relief on the ground; dropped) | .515 | .205 | .007 | .17 / .28 | .66 / .44 |
+        | sim only forest round 14 (BAMBI's gain: headroom above the bodies) | .551 | .218 | .024 | .20 / .30 | .58 / .56 |
         | real + 5 BAMBI flights (scarce s0) | .184 | .061 | .030 | .02 / .16 | .42 / .18 |
         | ... + v6 sim (scarce_sim s0) | .247 | .090 | .053 | .05 / .22 | .52 / .20 |
         | real + all BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 | .74 / .42 |
@@ -1254,6 +1255,34 @@ dog, boar).
     Animal AP50 .540 -> .515, AP50-95 .221 -> .205, recall at .25 .48 -> .44; on the
     train frames recall .46 -> .42, and the rimmed flights it was aimed at fell too (250
     .11 -> .05, 252 .17 -> .08, 143 .39 -> .32). Dropped.
+  - Grey levels, BAMBI train (600 frames) against the sim (round 12, world 10): the
+    sim's auto-gain stretched the 99-99.95th percentile to the top, so its bodies (a few
+    tenths of a percent of the pixels) clipped white and the ground was spread wide.
+    Brightest 5% of each animal box: BAMBI median 184 (a quarter under 124), sim 247;
+    frames reaching 250: BAMBI 56%, sim 92%; frame sd 35 against 43; animal contrast
+    over its surround 34 against 47, and the surround's sd 28 against 43. BAMBI's
+    typical frames are flatter than the sim's at every scale (band-pass energy about
+    0.6x from 1 to 16 px).
+  - The rimmed flights (250, 251, 252, 143, 346; all from November 2023 on) are the
+    other way: their detail rises toward the finest scale (1 px band 1.25x the 1-2 px
+    band; BAMBI's other flights 0.77, the sim 0.58, its enhanced shots no crisper). A
+    sharpening pass on the 1024 canvas can't reach that (best 0.9: the upscaled picture
+    holds too little at the pixel scale to boost), and there is no sign of
+    nearest-neighbour upscaling (no 1.6 px period). Their bodies' dark outlines and
+    inner lines look like the overshoot of strong sharpening.
+  - Round 14, on round 12, BAMBI's gain: the forest auto-gain's top is the
+    99.9-100th percentile (the warmest bodies), mapped 150-240 above the bottom (was
+    170-240). Same draws, so the same scenes as round 12. A 200-frame test: animals'
+    brightest 5% median 187 (BAMBI 184), frames reaching 250 about half, frame sd 30,
+    animal contrast 32, surround sd 30; the ground about 12 levels darker than BAMBI's,
+    and BAMBI keeps more faint animals (10th percentile 83 against 136).
+  - Animal AP50 .540 -> .551 (the best yet, within the noise), AP50-95 .221 -> .218;
+    recall at .25 .48 -> .56 at precision .64 -> .58, and at .5 .36 -> .44 (precision
+    .83 -> .78). On the 600 train frames recall .463 -> .538, up in nearly every bin
+    (busy surroundings .34 -> .41, flight 143 .39 -> .52, 250 .11 -> .19; 252 still
+    .07), but false alarms .49 -> .88 per frame: flight 246's hot rectangle as before,
+    and more on small warm specks and branches (flights 20, 17, 140, 141). Kept: val
+    holds or gains, and the sim's grey levels are now BAMBI's.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).

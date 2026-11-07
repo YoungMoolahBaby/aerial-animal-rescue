@@ -111,7 +111,10 @@ impl SensorParams {
 impl SensorParams {
     /// A cleaner camera for forest shots, like BAMBI's (DJI thermal drones, saved as
     /// undistorted video): little noise (median neighbour difference 1 grey level), no
-    /// interlace, a gain that keeps the ground darkish and lets warm bodies go white.
+    /// interlace, a gain that keeps the ground darkish and the warmest bodies near the top
+    /// with headroom: BAMBI train's frames reach 250 in only 56% of frames and their
+    /// animals' brightest 5% is at 184 (median); stretching the 99-99.95th percentile to
+    /// the top, as before, clipped most bodies white.
     pub fn forest(rng: &mut Rng) -> Self {
         let out_lo = rng.range(0.0, 30.0) as f32;
         Self {
@@ -133,9 +136,9 @@ impl SensorParams {
             fpn_col: rng.range(0.0, 0.3) as f32,
             fpn_row: rng.range(0.0, 0.3) as f32,
             agc_lo_pct: rng.range(0.2, 3.0) as f32,
-            agc_hi_pct: rng.range(99.0, 99.95) as f32,
+            agc_hi_pct: rng.range(99.9, 100.0) as f32,
             out_lo,
-            out_hi: (out_lo + rng.range(170.0, 240.0) as f32).min(255.0),
+            out_hi: (out_lo + rng.range(150.0, 240.0) as f32).min(255.0),
             jpeg_quality: rng.range(85.0, 97.0) as u8,
             // half the shots enhanced, from gently to BAMBI's strongest (white-rimmed
             // bodies on a crisp, busy ground)
