@@ -669,7 +669,8 @@ fn paint_canopy(
     }
     let mut sorted: Vec<f64> = level.iter().step_by(13).copied().collect();
     sorted.sort_by(f64::total_cmp);
-    let cut = sorted[(((1.0 - cover) * (sorted.len() - 1) as f64).round() as usize).min(sorted.len() - 1)];
+    let cut = sorted
+        [(((1.0 - cover) * (sorted.len() - 1) as f64).round() as usize).min(sorted.len() - 1)];
     // opacity as a smooth ramp round the cut, so the renderer's bilinear read and the
     // 0.5 alpha cut give smooth leaf edges at any distance; irregular gaps between leaves
     // a couple of decimetres across
@@ -859,7 +860,12 @@ fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(S
             centre[0] + rng.range(-0.4, 0.4) * size,
             centre[1] + rng.range(-0.4, 0.4) * size,
         ];
-        let mut s = slab(at, [h, h * rng.range(0.8, 1.0)], rng.range(0.0, TAU), temp(rng, 10.0));
+        let mut s = slab(
+            at,
+            [h, h * rng.range(0.8, 1.0)],
+            rng.range(0.0, TAU),
+            temp(rng, 10.0),
+        );
         s.ridge_c = rng.range(1.0, 4.0) * if rng.chance(0.5) { 1.0 } else { -1.0 };
         out.push((s, rng.range(3.5, 7.0), true));
     } else if u < 0.9 {
@@ -871,7 +877,11 @@ fn man_made(rng: &mut Rng, square: ([f64; 2], f64), tracks: &[Stroke]) -> Vec<(S
         let angle = rng.range(0.0, TAU);
         let len = rng.range(2.0, 2.4);
         let body_c = temp(rng, 12.0);
-        out.push((slab(at, [len, rng.range(0.85, 0.95)], angle, body_c), 1.5, false));
+        out.push((
+            slab(at, [len, rng.range(0.85, 0.95)], angle, body_c),
+            1.5,
+            false,
+        ));
         let glass = [
             at[0] + angle.cos() * len * 0.3,
             at[1] + angle.sin() * len * 0.3,
@@ -979,7 +989,12 @@ fn paint_crowns(
     let at = |p: [f64; 2]| ((p[0] - x0) / ts, (p[1] - z0) / ts);
     for b in crowns {
         blob(n, ts, at, b, table, 0, |k, cov, texture| {
-            over(&mut temps[k], &mut alpha[k], base_c + b.offset_c * texture, cov)
+            over(
+                &mut temps[k],
+                &mut alpha[k],
+                base_c + b.offset_c * texture,
+                cov,
+            )
         });
     }
     for s in branches {
@@ -1274,9 +1289,11 @@ mod tests {
     #[test]
     fn canopy_covers_about_its_share() {
         let table = NoiseTable::new(5);
-        let (temps, alpha) =
-            paint_canopy([0.0, 0.0], 50.0, 5.0, 0.6, 3.0, 1.0, 2.0, 11, &table);
-        assert_eq!((temps.len(), alpha.len()), (CANOPY_TEX * CANOPY_TEX, CANOPY_TEX * CANOPY_TEX));
+        let (temps, alpha) = paint_canopy([0.0, 0.0], 50.0, 5.0, 0.6, 3.0, 1.0, 2.0, 11, &table);
+        assert_eq!(
+            (temps.len(), alpha.len()),
+            (CANOPY_TEX * CANOPY_TEX, CANOPY_TEX * CANOPY_TEX)
+        );
         let share = alpha.iter().filter(|&&a| a >= 128).count() as f64 / alpha.len() as f64;
         // the cut leaves 60%, the gaps between leaves take some of that
         assert!((0.4..0.62).contains(&share), "{share}");
@@ -1347,7 +1364,10 @@ mod tests {
         // the edge is about a texel wide all round (6 m of it)
         assert!((edge as f64) < 1.6 * 6.0 / ts, "{edge}");
         // a roof's two slopes are the same size
-        assert!((sides[0] as f64 / sides[1] as f64 - 1.0).abs() < 0.1, "{sides:?}");
+        assert!(
+            (sides[0] as f64 / sides[1] as f64 - 1.0).abs() < 0.1,
+            "{sides:?}"
+        );
         // a disc swept 4 m covers a capsule
         let shadow = Slab {
             corner_m: 1.0,
@@ -1359,7 +1379,10 @@ mod tests {
         let mut area = 0.0;
         slab(n, ts, at, &shadow, |_, cov, _| area += cov * ts * ts);
         let capsule = PI + 2.0 * 4.0;
-        assert!((area - capsule).abs() < 0.03 * capsule, "{area} vs {capsule}");
+        assert!(
+            (area - capsule).abs() < 0.03 * capsule,
+            "{area} vs {capsule}"
+        );
     }
 
     #[test]
@@ -1403,7 +1426,10 @@ mod tests {
             .expect("a shot with man-made things");
         let got = look.ground_at(s.centre[0], s.centre[1]);
         let want = look.base_c + s.offset_c;
-        assert!((got - want).abs() <= s.ridge_c.abs() / 2.0 + 1.0, "{got} vs {want}");
+        assert!(
+            (got - want).abs() <= s.ridge_c.abs() / 2.0 + 1.0,
+            "{got} vs {want}"
+        );
     }
 
     #[test]
@@ -1422,7 +1448,11 @@ mod tests {
         };
         look.body_shadows(sun, &[deer]);
         let cooled = |x: f64, z: f64| before.ground_at(x, z) - look.ground_at(x, z);
-        assert!((cooled(-1.6, 0.0) - 0.8 * look.shadow_c).abs() < 1e-3, "{}", cooled(-1.6, 0.0));
+        assert!(
+            (cooled(-1.6, 0.0) - 0.8 * look.shadow_c).abs() < 1e-3,
+            "{}",
+            cooled(-1.6, 0.0)
+        );
         // nothing on the sun's side, under the feet or off to the side
         for (x, z) in [(1.6, 0.0), (0.0, 0.0), (-1.6, 1.0)] {
             assert_eq!(cooled(x, z), 0.0, "at {x}, {z}");
