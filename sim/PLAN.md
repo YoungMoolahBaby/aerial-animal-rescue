@@ -1373,6 +1373,13 @@ dog, boar).
     frames (.526 / .506 / .477, rimmed .26 / .25 / .20), so they stay dropped; round 17's
     val .578 is within the spread. From here a round needs two seeds to call a change
     under about .02.
+  - Scarce test again, with the forest sim (started 2026-11-10): `scarce_bambi_forest` =
+    the scarce set of 2026-11-05 (10,651 images, BAMBI train cut to flights 20, 79, 135,
+    227, 252) + round 16's 4,000 forest images (sim_forest14_w10-15 and
+    sim_forest16_w16-17, the list of the sim-only round), seeds 0 and 1, the same
+    settings. Against the same runs without sim (.184 / .137) and with the v6 sim (.247 /
+    .195), full BAMBI .498. Config runs/scarce_bambi_forest.yaml, list
+    D:/aar/scarce/scarce_bambi_forest_train.txt, chain D:/aar/scarce/scarce_bambi_forest_chain.py.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
