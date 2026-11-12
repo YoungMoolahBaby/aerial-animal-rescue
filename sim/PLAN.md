@@ -1473,6 +1473,30 @@ dog, boar).
       scarce_bambi_forest list (14,651 images) in the 6-epoch recipe, seed 0, best.pt on
       BAMBI val; config runs/sim_only_scarce_forest_short.yaml, chain
       D:/aar/scarce/decisive_chain.sh.
+    - Result (2026-11-12): BAMBI val animal AP50 .581, AP50-95 .235 (the same data in the
+      60-epoch recipe .225 / .272, AP50-95 .080 / .105), person .062, small .22, medium
+      .35, P / R at .25 .62 / .55; 22 of 25 flights better than the long run's seed 0, 2
+      worse. Its last epoch is its best, so picking best.pt on BAMBI val gives it no edge.
+      The same as test (a) without the other real data (.582 / .604): the data mix costs
+      BAMBI nothing; the 60-epoch recipe is what costs it .3.
+    - On the old real val (data/processed, 1,934 images, no BAMBI; runs/eval/real_val/):
+
+          | old real val | all AP50 / 50-95 | thermal AP50 / 50-95 | person | cattle (RGB) | other_animal | alarms per empty |
+          |---|---|---|---|---|---|---|
+          | 60-epoch recipe (s0 / s1) | .590 / .324, .600 / .323 | .452 / .194, .463 / .187 | .207 / .220 | .866 / .873 | .697 / .706 | .10 / .09 |
+          | 6-epoch recipe (s0) | .589 / .281 | .470 / .203 | .236 | .827 | .705 | .16 |
+
+      At AP50 the short recipe holds the other sources (thermal and people a little up,
+      cattle .04 down), but its boxes are looser (AP50-95 .28 against .32, all from
+      cattle and RGB) and it raises more alarms. So the long recipe buys tighter boxes
+      on the old sources and loses most of BAMBI.
+    - What in the long recipe? Two things changed together: the optimizer (MuSGD lr .01
+      vs AdamW lr .0009, both chosen by `optimizer=auto` from the run length) and the
+      length (33-54 epochs vs 6). Cheap splits: the short recipe with SGD lr .01 forced
+      (optimizer, ~40 min), and 20 epochs (AdamW is still auto-picked below 10,000
+      iterations; length, ~2 h). And the sim's own share in the short recipe: the scarce
+      set without sim in 6 epochs (~35 min). Earlier BAMBI conclusions measured in the
+      long recipe (v6 closes ~18%, forest ~26%) likely understate the sim on BAMBI.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
