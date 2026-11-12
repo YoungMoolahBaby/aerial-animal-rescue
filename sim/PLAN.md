@@ -1443,6 +1443,32 @@ dog, boar).
       which source does the harm: test (a)'s set + one real source each, seed 0 —
       HIT-UAV 2,795 images, BIRDSAI 6,739, ICAERUS 986 (`sim_bambi131_<source>_s0`),
       against test (a) .582 / .604. Lists D:/aar/scarce/sim_forest16_bambi*_train.txt.
+    - Result (2026-11-12, runs/eval/bambi_val2/; 15-30 minutes a run):
+
+          | BAMBI val (6 epochs) | animal AP50 | animal AP50-95 | small / medium | P / R at .25 |
+          |---|---|---|---|---|
+          | sim + 131 BAMBI frames = test (a) (s0 / s1) | .582 / .604 | .238 / .243 | .19-.22 / .32-.34 | .66-.64 / .55-.57 |
+          | ... + HIT-UAV (s0) | .606 | .244 | .21 / .37 | .59 / .58 |
+          | ... + BIRDSAI (s0) | .578 | .240 | .21 / .32 | .69 / .51 |
+          | ... + ICAERUS (s0) | .573 | .232 | .23 / .33 | .59 / .54 |
+          | sim + all 1,582 BAMBI train frames (s0 / s1) | .616 / .598 | .261 / .249 | .22 / .32-.33 | .77-.79 / .48-.47 |
+          | full BAMBI + all real, 60 epochs (bambi) | .498 | .195 | .28 / .39 | .74 / .42 |
+
+      No single source does harm: each added alone stays within the seed spread of test
+      (a) (BIRDSAI: flight median .575 against .690, 6 flights better and 8 worse, the
+      only hint). And all of BAMBI with the sim gives .607 over two seeds, only +.014 over
+      131 frames, but above the mixed `bambi` run (.498) on AP50-95 too (.255 against
+      .195), better on 14 of 25 flights (5-7 worse), at higher precision (.78 / .47 vs
+      .74 / .42). People collapse without the other real data (.002 / .024; not judged).
+    - Correction: test (a)'s reading ("the other real data held the mixed runs back") is
+      confounded. The 6-epoch runs and the 60-epoch runs differ in more than data:
+      ultralytics' `optimizer=auto` picks AdamW at lr .0009 for short runs and MuSGD at
+      .01 for long ones (logs), with a different warmup share and decay, and the long
+      runs train 33-54 epochs. Since no source hurts on its own in the short recipe, the
+      likely culprit is the recipe (or all sources together). Decisive and cheap: the
+      scarce mixed set (all real + sim + 131 BAMBI, 14,651 images) in the 6-epoch recipe.
+      If it lands near .55-.60, the long recipe is what costs BAMBI (then: fix the
+      optimizer, e.g. AdamW for the long runs, rather than the data mix).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
