@@ -1408,6 +1408,12 @@ dog, boar).
       BAMBI val itself, over 6 epochs: a small edge, not .3.) Next to test: the sim plus
       the 131 BAMBI frames without the other real data, and sim pretraining then the
       scarce real set.
+    - Test (a), started 2026-11-12: round 16's 4,000 forest images + the 131 scarce BAMBI
+      frames (469 boxes), no other real data, the sim-only settings (6 epochs, best.pt on
+      BAMBI val), seeds 0 and 1: `sim_bambi131_forest16_s0/_s1`, config
+      runs/sim_only_forest16_bambi131.yaml, list D:/aar/scarce/sim_forest16_bambi131_train.txt,
+      chain D:/aar/scarce/sim_bambi131_chain.sh. Against sim only .575 / .552 and the scarce
+      mixed runs .225 / .272.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
