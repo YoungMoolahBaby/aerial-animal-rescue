@@ -1497,6 +1497,12 @@ dog, boar).
       iterations; length, ~2 h). And the sim's own share in the short recipe: the scarce
       set without sim in 6 epochs (~35 min). Earlier BAMBI conclusions measured in the
       long recipe (v6 closes ~18%, forest ~26%) likely understate the sim on BAMBI.
+    - Started 2026-11-12 (chain D:/aar/scarce/checks13_chain.sh, seed 0, evals on BAMBI val
+      and the old real val): check 1 = the decisive check with the long recipe's
+      optimizer forced (MuSGD lr .01, momentum .9, bias warmup from 0; config
+      runs/check1_scarce_forest_short_musgd.yaml); check 3 = the scarce set without sim in
+      the 6-epoch recipe (runs/check3_scarce_nosim_short.yaml). The 20-epoch length check
+      only if check 1 doesn't collapse BAMBI.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
