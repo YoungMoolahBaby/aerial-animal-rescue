@@ -1414,6 +1414,28 @@ dog, boar).
       runs/sim_only_forest16_bambi131.yaml, list D:/aar/scarce/sim_forest16_bambi131_train.txt,
       chain D:/aar/scarce/sim_bambi131_chain.sh. Against sim only .575 / .552 and the scarce
       mixed runs .225 / .272.
+    - Result (2026-11-12, runs/eval/bambi_val2/; 13 minutes a seed):
+
+          | BAMBI val | animal AP50 | animal AP50-95 | small / medium | P / R at .25 |
+          |---|---|---|---|---|
+          | forest round 16 sim only (s0 / s1) | .575 / .552 | .231 / .223 | .23-.24 / .31-.32 | .59-.53 / .56-.57 |
+          | + 131 BAMBI frames (s0 / s1) | .582 / .604 | .238 / .243 | .19-.22 / .32-.34 | .66-.64 / .55-.57 |
+          | scarce real set + the same sim (s0 / s1) | .225 / .272 | .080 / .105 | .07-.09 / .19-.21 | .51-.50 / .17-.22 |
+          | full BAMBI + all real (bambi) | .498 | .195 | .28 / .39 | .74 / .42 |
+
+      The same 131 frames and 4,000 sim images give .593 over the two seeds alone and .249
+      with the ~10,500 other real images: the other real data is what held the mixed runs
+      back on BAMBI, not the sim. The 131 frames add +.03 to the sim alone (+.007 / +.052;
+      11 / 10 of 25 flights better, 6 / 4 worse), mostly as precision at the same recall.
+      Best BAMBI val result yet, above full BAMBI with all real data (.498). People drop
+      (.004 / .024, sim only .04-.05; not judged). Caveat: these 6-epoch runs pick best.pt
+      on BAMBI val itself (as the sim-only rounds do); the 60-epoch mixed runs pick it on
+      the whole val set.
+    - So for BAMBI-like forest flights the other sources (BIRDSAI savanna, HIT-UAV city,
+      ICAERUS RGB cattle) hurt more than they help, possibly also in the full `bambi` run.
+      Open: full BAMBI train + forest sim without the other real data; whether mixing can
+      be fixed (more weight on BAMBI and sim, or sim pretraining then fine-tuning) so one
+      detector serves all sources.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
