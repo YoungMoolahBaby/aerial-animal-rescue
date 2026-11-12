@@ -1503,6 +1503,44 @@ dog, boar).
       runs/check1_scarce_forest_short_musgd.yaml); check 3 = the scarce set without sim in
       the 6-epoch recipe (runs/check3_scarce_nosim_short.yaml). The 20-epoch length check
       only if check 1 doesn't collapse BAMBI.
+    - Result (2026-11-12; best.pt picked on BAMBI val, last.pt too since check 3's best
+      was epoch 3 of 6):
+
+          | BAMBI val (6 epochs, seed 0) | animal AP50 best / last | AP50-95 | person | small / medium | P / R at .25 |
+          |---|---|---|---|---|---|
+          | decisive: scarce set, AdamW (auto) | .581 (best = last) | .235 | .062 | .22 / .35 | .62 / .55 |
+          | check 1: scarce set, MuSGD lr .01 forced | .574 / .581 | .238 / .235 | .010 / .046 | .21 / .32-.34 | .63-.64 / .54 |
+          | check 3: scarce set without sim, AdamW | .156 / .157 | .060 / .059 | .021 / .015 | .02-.03 / .13-.18 | .37-.22 / .12-.19 |
+          | for scale: scarce set, 60-epoch recipe (s0 / s1) | .225 / .272 | .080 / .105 | .055 / .069 | .07-.09 / .19-.21 | .51-.50 / .17-.22 |
+
+      Check 1: the optimizer is not it. MuSGD at lr .01 gives the same BAMBI as AdamW
+      (flight median .607 against .600, 16 of 36 flights with animals better and 18
+      worse). Check 3: in the short recipe the sim carries BAMBI. Without it, the same
+      real data plus 131 BAMBI frames reaches .156 (flight median .068, 32 of 36 flights
+      worse). So the sim adds +.42 here, against +.09 in the long recipe (.249 vs .161).
+    - On the old real val (last.pt; runs/eval/real_val/):
+
+          | old real val (6 epochs) | all AP50 / 50-95 | thermal AP50 | person | cattle | other_animal | alarms per empty |
+          |---|---|---|---|---|---|---|
+          | decisive (AdamW, with sim) | .589 / .281 | .470 | .236 | .827 | .705 | .16 |
+          | check 1 (MuSGD, with sim) | .508 / .226 | .383 | .095 | .756 | .672 | .17 |
+          | check 3 (AdamW, without sim) | .548 / .252 | .451 | .202 | .742 | .700 | .25 |
+
+      MuSGD needs more than 6 epochs for the old sources (people and cattle lag), but
+      BAMBI doesn't care. Check 3 runs 27% fewer steps (no sim, 10,651 images), so its
+      old-val gap is not judged.
+    - A third difference I missed: mosaic. With close_mosaic=10 (the default), the
+      trainer turns mosaic off from the epoch where `epoch >= epochs - close_mosaic`.
+      For 6 epochs that is epoch 0 ("Closing dataloader mosaic" before epoch 1 in every
+      short log), so every 6-epoch run so far trained without mosaic. That covers all
+      the forest rounds, test (a), the source checks, the decisive check, and checks 1
+      and 3. The 60-epoch runs kept mosaic through epoch 50 (their best epochs were 33-34).
+      So the short and long recipes still differ in mosaic and in length (plus its LR
+      decay), not in the optimizer. Cheap split: check 2a = the decisive recipe with
+      mosaic on (close_mosaic=0, ~45 min); check 2b = 20 epochs with mosaic off
+      throughout (close_mosaic=20, AdamW still auto, ~2.3 h). If mosaic is it, the long
+      baselines measured with it (v6 .221, none .161, `bambi` .498) understate BAMBI,
+      and the fix is a long run without mosaic, not a different optimizer.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
