@@ -1577,6 +1577,45 @@ dog, boar).
       evaluated on BAMBI val and the old real val. Chain D:/aar/scarce/check2b_chain.sh,
       ~2.6 h. If BAMBI holds near .58 and old-val boxes tighten with epochs, a long run
       with mosaic off is the recipe to try.
+    - Result (2026-11-12, 2 h training + 16 min evals; AdamW lr .0009, mosaic off from
+      epoch 1, confirmed in the log):
+
+          | BAMBI val, 20 epochs mosaic off (seed 0) | animal AP50 | AP50-95 | person | small / medium | P / R at .25 | flight median (36) |
+          |---|---|---|---|---|---|---|
+          | after epoch 6 (epoch5.pt, LR still high) | .538 | .200 | .025 | .16 / .31 | .65 / .47 | .536 |
+          | after epoch 11 | .594 | .243 | .068 | .24 / .35 | .62 / .56 | .569 (17 better, 17 worse) |
+          | after epoch 16 | .567 | .231 | .094 | .29 / .33 | .63 / .53 | .509 |
+          | best.pt (epoch 15) | .588 | .244 | .105 | .28 / .37 | .69 / .53 | - |
+          | last.pt (epoch 20) | .575 | .236 | .147 | .27 / .37 | .69 / .52 | .509 (18 better, 16 worse) |
+          | for scale: 6 epochs mosaic off / on (last) | .581 / .450 | .235 / .166 | .062 / .029 | .22 / .35, .13 / .28 | .62 / .55, .61 / .38 | .600 / .361 |
+          | 60-epoch recipe (s0 / s1) | .225 / .272 | .080 / .105 | .055 / .069 | .07-.09 / .19-.21 | .51-.50 / .17-.22 | .127 / .171 |
+
+      Length alone does not cost BAMBI. Without mosaic, animal AP50 holds .57-.59 from
+      epoch 11 to 20, and the rest improves: small animals .22 to .28, people on BAMBI .06
+      to .15, precision .62 to .69. The all-class BAMBI val curve rises steadily (.24 at
+      epoch 1, .31 at 6, .34 at 10, .41 at 15, .40 at 20). So the long recipe's loss
+      needs mosaic: it costs .07-.13 within 6 epochs and, by this reading, most of the
+      .33 over 50.
+
+          | old real val | all AP50 / 50-95 | thermal AP50 | person | cattle | other_animal | alarms per empty |
+          |---|---|---|---|---|---|---|
+          | 6 epochs mosaic off / on (last) | .589 / .281, .597 / .307 | .470 / .469 | .236 / .228 | .827 / .853 | .705 / .709 | .16 / .13 |
+          | 20 epochs mosaic off, after epoch 11 | .549 / .279 | .440 | .174 | .768 | .706 | .55 |
+          | 20 epochs mosaic off, best.pt (15) | .529 / .290 | .385 | .079 | .817 | .692 | .38 |
+          | 20 epochs mosaic off, last.pt (20) | .549 / .295 | .401 | .115 | .845 | .688 | .23 |
+          | 60-epoch recipe (s0 / s1) | .590 / .324, .600 / .323 | .452 / .463 | .207 / .220 | .866 / .873 | .697 / .706 | .10 / .09 |
+
+      But without mosaic, length costs the old sources: thermal .470 to .401 and people
+      .236 to .115 (HIT-UAV and BIRDSAI val), while cattle and box tightness gain (.845,
+      AP50-95 .295). Read together: mosaic protects the old thermal sources and people
+      and costs BAMBI; no mosaic keeps BAMBI and, given length, loses the old thermal
+      sources. Neither recipe wins both. Single seed. The mosaic-on-over-length half
+      is inferred from the 60-epoch runs, which also differ in optimizer (ruled out at
+      6 epochs only).
+    - Clean next step (proposed, not run): 20 epochs with mosaic on (close_mosaic=0),
+      the same everything else (~2.2 h). It completes the 2x2 (6 / 20 epochs x mosaic
+      off / on) at matched optimizer, and gives both sides of the trade-off at equal
+      length. After that, middle grounds: mosaic=0.5, or mosaic for the first half only.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
