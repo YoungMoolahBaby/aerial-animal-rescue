@@ -1436,6 +1436,13 @@ dog, boar).
       Open: full BAMBI train + forest sim without the other real data; whether mixing can
       be fixed (more weight on BAMBI and sim, or sim pretraining then fine-tuning) so one
       detector serves all sources.
+    - Started 2026-11-12, same settings (6 epochs, best.pt on BAMBI val), chain
+      D:/aar/scarce/source_checks_chain.sh: (1) the sim + all 1,582 BAMBI train frames (55
+      flights), no other real data, seeds 0 and 1 (`sim_bambiall_forest16_s*`), to set
+      what a mixed detector should reach on BAMBI (the full mixed `bambi` run: .498); (2)
+      which source does the harm: test (a)'s set + one real source each, seed 0 —
+      HIT-UAV 2,795 images, BIRDSAI 6,739, ICAERUS 986 (`sim_bambi131_<source>_s0`),
+      against test (a) .582 / .604. Lists D:/aar/scarce/sim_forest16_bambi*_train.txt.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
