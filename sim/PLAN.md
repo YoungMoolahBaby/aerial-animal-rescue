@@ -1380,6 +1380,34 @@ dog, boar).
     settings. Against the same runs without sim (.184 / .137) and with the v6 sim (.247 /
     .195), full BAMBI .498. Config runs/scarce_bambi_forest.yaml, list
     D:/aar/scarce/scarce_bambi_forest_train.txt, chain D:/aar/scarce/scarce_bambi_forest_chain.py.
+  - Result (2026-11-11, runs/eval/bambi_val2/ and runs/eval/full_val/; early stop at epochs
+    54 / 53, best 34 / 33):
+
+          | BAMBI val | animal AP50 | animal AP50-95 | person AP50 | small / medium |
+          |---|---|---|---|---|
+          | scarce, no sim (s0 / s1) | .184 / .137 | .061 / .043 | .030 / .057 | .02-.04 / .15-.16 |
+          | scarce + sim v6 (s0 / s1) | .247 / .195 | .090 / .068 | .053 / .054 | .05-.06 / .16-.22 |
+          | scarce + forest round 16 (s0 / s1) | .225 / .272 | .080 / .105 | .055 / .069 | .07-.09 / .19-.21 |
+          | full BAMBI (bambi) | .498 | .195 | .211 | .28 / .39 |
+          | forest round 16 sim only (s0 / s1) | .575 / .552 | .231 / .223 | | |
+
+      Over the two seeds animals .161 (no sim) -> .221 (v6) -> .249 (forest): the forest
+      sim closes ~26% of the gap to full BAMBI, v6 ~18%. Small animals .03 -> .06 -> .08.
+      Paired by seed the forest sim beats v6 on s1 (+.077; 18 of 25 flights with >= 20
+      animal boxes better, 3 worse) but not on s0 (-.022; 10 better, 12 worse), so its
+      lead over v6 is within the seed spread; over no sim it's clear (18 / 23 flights
+      better, 6 / 0 worse). Full val (all sources) .534 / .550, same as v6 (.555 / .540).
+    - The puzzle: the same 4,000 forest images alone give .564, with the scarce real set
+      .249. Not the class: ignoring classes (single_cls) the forest runs score .311 / .353
+      (v6 s0 .239, no sim .198, sim only .572, full .502), and matched at IoU .5 and conf
+      .25 only 2-3% of BAMBI animals are called person, ~0 cattle. Not the epoch pick:
+      last.pt scores .213 / .223. It is recall: the mixed models leave 74-80% of BAMBI's
+      animals unfound at .25, the sim-only model 40%. With ~10,500 other real images
+      (BIRDSAI, HIT-UAV, ICAERUS) next to 4,000 sim and 131 BAMBI frames, what the sim
+      teaches mostly doesn't reach BAMBI's frames. (The sim-only runs pick best.pt on
+      BAMBI val itself, over 6 epochs: a small edge, not .3.) Next to test: the sim plus
+      the 131 BAMBI frames without the other real data, and sim pretraining then the
+      scarce real set.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
