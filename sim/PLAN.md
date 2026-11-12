@@ -1546,6 +1546,30 @@ dog, boar).
       on BAMBI val) with close_mosaic=0 (mosaic on all 6 epochs). best.pt and last.pt
       evaluated on BAMBI val and the old real val. Chain D:/aar/scarce/check2a_chain.sh.
       Against the decisive check's .581; near .25 means mosaic is what costs BAMBI.
+    - Result (2026-11-12, 45 minutes; AdamW lr .0009 confirmed, mosaic never closed):
+
+          | BAMBI val (6 epochs, seed 0) | animal AP50 | AP50-95 | person | small / medium | P / R at .25 | flight median (36) |
+          |---|---|---|---|---|---|---|
+          | decisive: mosaic off (best = last) | .581 | .235 | .062 | .22 / .35 | .62 / .55 | .600 |
+          | check 2a: mosaic on, best.pt (epoch 4) | .507 | .192 | .063 | .17 / .34 | .58 / .47 | .430 (9 better, 25 worse) |
+          | check 2a: mosaic on, last.pt | .450 | .166 | .029 | .13 / .28 | .61 / .38 | .361 (10 better, 25 worse) |
+          | 60-epoch recipe (s0 / s1) | .225 / .272 | .080 / .105 | .055 / .069 | .07-.09 / .19-.21 | .51-.50 / .17-.22 | .127 / .171 |
+
+          | old real val | all AP50 / 50-95 | thermal AP50 | person | cattle | other_animal | alarms per empty |
+          |---|---|---|---|---|---|---|
+          | decisive: mosaic off | .589 / .281 | .470 | .236 | .827 | .705 | .16 |
+          | check 2a: mosaic on, last.pt | .597 / .307 | .469 | .228 | .853 | .709 | .13 |
+          | 60-epoch recipe (s0 / s1) | .590 / .324, .600 / .323 | .452 / .463 | .207 / .220 | .866 / .873 | .697 / .706 | .10 / .09 |
+
+      Mosaic costs BAMBI part of the drop: .07 at the best epoch and .13 at the last,
+      beyond the short recipe's seed spread so far (.02). That is a fifth to two fifths of
+      the ~.33 the long recipe loses, so the rest comes with length. Its BAMBI val curve
+      also swings (all-class AP50 .20, .15, .12, .28, .23, .26 by epoch; the mosaic-off
+      run rose steadily). On the old sources mosaic is what tightens the boxes (AP50-95
+      .307 against .281, cattle .853 against .827) and cuts alarms, most of the way to
+      the long recipe. So it's a trade-off: mosaic helps the old sources and hurts
+      BAMBI. Open: does length alone cost BAMBI (check 2b, 20 epochs with mosaic off),
+      or only length with mosaic?
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
