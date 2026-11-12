@@ -1541,6 +1541,11 @@ dog, boar).
       throughout (close_mosaic=20, AdamW still auto, ~2.3 h). If mosaic is it, the long
       baselines measured with it (v6 .221, none .161, `bambi` .498) understate BAMBI,
       and the fix is a long run without mosaic, not a different optimizer.
+    - Check 2a started 2026-11-12: `check2a_scarce_forest_short_mosaic_s0` = the decisive
+      check (runs/sim_only_scarce_forest_short.yaml, 6 epochs, AdamW auto, seed 0, best.pt
+      on BAMBI val) with close_mosaic=0 (mosaic on all 6 epochs). best.pt and last.pt
+      evaluated on BAMBI val and the old real val. Chain D:/aar/scarce/check2a_chain.sh.
+      Against the decisive check's .581; near .25 means mosaic is what costs BAMBI.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
