@@ -1570,6 +1570,13 @@ dog, boar).
       the long recipe. So it's a trade-off: mosaic helps the old sources and hurts
       BAMBI. Open: does length alone cost BAMBI (check 2b, 20 epochs with mosaic off),
       or only length with mosaic?
+    - Check 2b started 2026-11-12: `check2b_scarce_forest_20ep_nomosaic_s0` = the decisive
+      check for 20 epochs with close_mosaic=20 (mosaic off throughout; AdamW lr .0009
+      still auto-picked at 4,580 iterations), seed 0, best.pt on BAMBI val, save_period=5
+      (epoch5/10/15.pt = after epochs 6, 11, 16). best, last and the epoch checkpoints are
+      evaluated on BAMBI val and the old real val. Chain D:/aar/scarce/check2b_chain.sh,
+      ~2.6 h. If BAMBI holds near .58 and old-val boxes tighten with epochs, a long run
+      with mosaic off is the recipe to try.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
