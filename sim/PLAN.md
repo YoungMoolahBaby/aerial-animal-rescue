@@ -1469,6 +1469,10 @@ dog, boar).
       scarce mixed set (all real + sim + 131 BAMBI, 14,651 images) in the 6-epoch recipe.
       If it lands near .55-.60, the long recipe is what costs BAMBI (then: fix the
       optimizer, e.g. AdamW for the long runs, rather than the data mix).
+    - Decisive check started 2026-11-12: `scarce_bambi_forest_short_s0` = the
+      scarce_bambi_forest list (14,651 images) in the 6-epoch recipe, seed 0, best.pt on
+      BAMBI val; config runs/sim_only_scarce_forest_short.yaml, chain
+      D:/aar/scarce/decisive_chain.sh.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
