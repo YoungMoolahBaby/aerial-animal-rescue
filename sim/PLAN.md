@@ -1616,6 +1616,12 @@ dog, boar).
       the same everything else (~2.2 h). It completes the 2x2 (6 / 20 epochs x mosaic
       off / on) at matched optimizer, and gives both sides of the trade-off at equal
       length. After that, middle grounds: mosaic=0.5, or mosaic for the first half only.
+    - Check 2c started 2026-11-12: `check2c_scarce_forest_20ep_mosaic_s0` = check 2b with
+      close_mosaic=0 (mosaic on all 20 epochs), else identical (AdamW auto, seed 0, best.pt
+      on BAMBI val, save_period=5; best, last and epoch5/10/15.pt on BAMBI val and the old
+      real val). Chain D:/aar/scarce/check2c_chain.sh, ~2.6 h. If BAMBI falls well below
+      2b's .575-.59 (toward the 60-epoch .25), mosaic over length is confirmed as the cost
+      with the optimizer held fixed.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
