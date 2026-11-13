@@ -1661,6 +1661,37 @@ dog, boar).
       `check2e_scarce_forest_20ep_mosaic_p05_s0` (close_mosaic=0, mosaic=0.5). Otherwise
       identical to checks 2b/2c (AdamW auto, seed 0, best.pt on BAMBI val, save_period=5;
       best, last and epoch5/10/15.pt on BAMBI val and the old real val).
+    - Result (2026-11-12, ~2 h each; both logs confirm the setting: 2d closed mosaic once,
+      before epoch 11, and its epochs 1-10 match 2c to five decimals; 2e mosaic=0.5, never
+      closed):
+
+          | 20 epochs, seed 0 | BAMBI animal AP50 last (best, epoch) | BAMBI small last | old val AP50 / 50-95 last | old thermal | old people | old cattle |
+          |---|---|---|---|---|---|---|
+          | 2b: mosaic off | .575 (.588, 15) | .27 | .549 / .295 | .401 | .115 | .845 |
+          | 2d: mosaic epochs 1-10, off 11-20 | .466 (.565, 12) | .11 | .571 / .316 | .421 | .171 | .871 |
+          | 2e: mosaic at p=0.5 | .499 (.546, 17) | .18 | .583 / .314 | .440 | .186 | .870 |
+          | 2c: mosaic on | .347 (.468, 13) | .08 | .606 / .324 | .464 | .227 | .889 |
+          | for scale: 6 epochs, mosaic off | .581 (= last) | .22 | .589 / .281 | .470 | .236 | .827 |
+
+      Neither middle ground reaches the target. Both land on the line between 2b and
+      2c: the more mosaic, the better the old sources and the worse BAMBI. 2e beats 2d on
+      every column at last.pt. 2d's BAMBI jumps once mosaic stops (all-class .27 at epoch
+      10, .33 at 12, against 2c's .24 and .28) and then fades back to .28 by epoch 20,
+      while 2b holds. With swings of about ±.05 between epochs, single-epoch readings are
+      shaky.
+
+      Reading across the five recipes: the 6-epoch mosaic-off run is still the best
+      balance on this data. It has the highest BAMBI, old thermal and old people. It
+      gives up only cattle (.827 against .87-.89) and box tightness (AP50-95 .281 against
+      .31-.32). Training longer at this learning rate buys cattle and tighter boxes and
+      costs either BAMBI (with mosaic) or the old thermal sources (without). Single seed
+      for every cell.
+    - Next options (proposed, not run): (1) firm up the benchmark with seed 1 of the
+      decisive check and check 3 (~70 min), so "the sim is worth +.42 on BAMBI in the
+      mixed set" rests on two seeds; (2) a mechanism probe: sim + 131 BAMBI (test (a)'s
+      set, 13 min) with mosaic on. If BAMBI drops well below .58 without any other real
+      data, mosaic breaks what the sim teaches (a sim-side fix may exist); if it holds,
+      the loss comes from mosaic mixing in the other real sources.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
