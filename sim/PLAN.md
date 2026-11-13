@@ -1622,6 +1622,40 @@ dog, boar).
       real val). Chain D:/aar/scarce/check2c_chain.sh, ~2.6 h. If BAMBI falls well below
       2b's .575-.59 (toward the 60-epoch .25), mosaic over length is confirmed as the cost
       with the optimizer held fixed.
+    - Result (2026-11-12, 2 h training + 13 min evals; AdamW lr .0009, mosaic never
+      closed). BAMBI val animal AP50 by checkpoint: after epoch 6 .451, 11 .384, 16 .410,
+      best.pt (epoch 13) .468, last.pt (20) .347. Flight median .17-.43 against .600, 26-29
+      of 36 flights worse. The all-class BAMBI val curve stays flat and noisy (.20-.31).
+      Old real val last.pt .606 / .324, thermal .464, people .227, cattle .889 (best
+      cattle yet).
+
+      The 2x2 (seed 0, AdamW, same data; last.pt, so no BAMBI-val pick):
+
+          | | BAMBI animal AP50 | BAMBI small | old val AP50 / 50-95 | old thermal | old people | old cattle |
+          |---|---|---|---|---|---|---|
+          | 6 epochs, mosaic off (decisive) | .581 | .22 | .589 / .281 | .470 | .236 | .827 |
+          | 6 epochs, mosaic on (2a) | .450 | .13 | .597 / .307 | .469 | .228 | .853 |
+          | 20 epochs, mosaic off (2b) | .575 | .27 | .549 / .295 | .401 | .115 | .845 |
+          | 20 epochs, mosaic on (2c) | .347 | .08 | .606 / .324 | .464 | .227 | .889 |
+          | 60-epoch recipe, MuSGD, mosaic to epoch 50 (s0 / s1) | .225 / .272 | .07-.09 | .590 / .324, .600 / .323 | .452 / .463 | .207 / .220 | .866 / .873 |
+
+      Confirmed with the optimizer fixed: mosaic is what costs BAMBI, and the cost
+      grows with length (-.13 at 6 epochs, -.23 at 20; the 60-epoch runs continue the
+      line at -.33). Without mosaic, BAMBI holds over length but the old thermal sources
+      and people slip (.470 to .401, .236 to .115). With mosaic, the old sources hold and
+      cattle and box tightness grow. 20 epochs with mosaic already match the 60-epoch
+      recipe on the old real val (.606 / .324 against .590-.600 / .323) at a third of the
+      time. Single seed throughout.
+
+      What this changes: every long-recipe BAMBI comparison (v6 closes 18% of the gap,
+      forest 26%) was measured under mosaic, which drags BAMBI down. In the mosaic-off
+      recipe the forest sim is worth +.42 on BAMBI (check 3). And every forest round was
+      tuned without mosaic.
+    - Next options (proposed, not run): middle grounds at 20 epochs that might keep both.
+      (1) mosaic for the first 10 epochs, off for the last 10 (close_mosaic=10, the
+      stock behaviour with a longer tail); (2) mosaic at probability 0.5 throughout. Each
+      ~2.3 h, can chain overnight. Target: BAMBI near .55+ with old thermal near .46 and
+      people near .22.
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
