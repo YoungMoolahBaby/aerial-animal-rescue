@@ -1656,6 +1656,11 @@ dog, boar).
       stock behaviour with a longer tail); (2) mosaic at probability 0.5 throughout. Each
       ~2.3 h, can chain overnight. Target: BAMBI near .55+ with old thermal near .46 and
       people near .22.
+    - Both started 2026-11-12 (chain D:/aar/scarce/check2de_chain.sh, one after the other):
+      `check2d_scarce_forest_20ep_mosaic_half1_s0` (close_mosaic=10) and
+      `check2e_scarce_forest_20ep_mosaic_p05_s0` (close_mosaic=0, mosaic=0.5). Otherwise
+      identical to checks 2b/2c (AdamW auto, seed 0, best.pt on BAMBI val, save_period=5;
+      best, last and epoch5/10/15.pt on BAMBI val and the old real val).
 - RGB flood and debris scenes; cats.
 - Weather in the image: rain streaks, fog/haze, wet surfaces; flood water reflecting the
   sky (cold and mirror-like in thermal).
